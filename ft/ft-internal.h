@@ -114,6 +114,7 @@ PATENT RIGHTS GRANT:
 #include "compress.h"
 #include <util/mempool.h>
 #include <util/omt.h>
+#include "bndata.h"
 
 #ifndef FT_FANOUT
 #define FT_FANOUT 16
@@ -244,10 +245,7 @@ uint32_t get_leaf_num_entries(FTNODE node);
 
 // data of an available partition of a leaf ftnode
 struct ftnode_leaf_basement_node {
-    OMT buffer;                     // pointers to individual leaf entries
-    struct mempool buffer_mempool;  // storage for all leaf entries
-    unsigned int n_bytes_in_buffer; // How many bytes to represent the OMT (including the per-key overheads, ...
-                                    // ... but not including the overheads for the node. 
+    bn_data data_buffer;
     unsigned int seqinsert;         // number of sequential inserts to this leaf 
     MSN max_msn_applied;            // max message sequence number applied
     bool stale_ancestor_messages_applied;
@@ -450,8 +448,7 @@ static inline void set_BSB(FTNODE node, int i, SUB_BLOCK sb) {
 // ftnode leaf basementnode macros, 
 #define BLB_MAX_MSN_APPLIED(node,i) (BLB(node,i)->max_msn_applied)
 #define BLB_MAX_DSN_APPLIED(node,i) (BLB(node,i)->max_dsn_applied)
-#define BLB_BUFFER(node,i) (BLB(node,i)->buffer)
-#define BLB_BUFFER_MEMPOOL(node,i) (BLB(node,i)->buffer_mempool)
+#define BLB_DATA(node,i) (&(BLB(node,i)->data_buffer))
 #define BLB_NBYTESINBUF(node,i) (BLB(node,i)->n_bytes_in_buffer)
 #define BLB_SEQINSERT(node,i) (BLB(node,i)->seqinsert)
 

@@ -677,15 +677,7 @@ ftleaf_disk_size(FTNODE node)
     toku_assert_entire_node_in_memory(node);
     uint64_t retval = 0;
     for (int i = 0; i < node->n_children; i++) {
-        OMT curr_buffer = BLB_BUFFER(node, i);
-        const uint32_t n_leafentries = toku_omt_size(curr_buffer);
-        for (uint32_t j=0; j < n_leafentries; j++) {
-            OMTVALUE v;
-            int r = toku_omt_fetch(curr_buffer, j, &v);
-            assert_zero(r);
-            LEAFENTRY CAST_FROM_VOIDP(curr_le, v);
-            retval += leafentry_disksize(curr_le);
-        }
+        retval += BLB_DATA(node, i)->get_disk_size();
     }
     return retval;
 }
@@ -704,16 +696,16 @@ ftleaf_get_split_loc(
     switch (split_mode) {
     case SPLIT_LEFT_HEAVY: {
         *num_left_bns = node->n_children;
-        *num_left_les = toku_omt_size(BLB_BUFFER(node, *num_left_bns - 1));
+        *num_left_les = BLB_DATA(node, *num_left_bns - 1)->get_num_entries();
         if (*num_left_les == 0) {
             *num_left_bns = node->n_children - 1;
-            *num_left_les = toku_omt_size(BLB_BUFFER(node, *num_left_bns - 1));
+            *num_left_les = BLB_DATA(node, *num_left_bns - 1)->get_num_entries();
         }
         goto exit;
     }
     case SPLIT_RIGHT_HEAVY: {
         *num_left_bns = 1;
-        *num_left_les = toku_omt_size(BLB_BUFFER(node, 0)) ? 1 : 0;
+        *num_left_les = BLB_DATA(node, 0)->get_num_entries() ? 1 : 0;
         goto exit;
     }
     case SPLIT_EVENLY: {
@@ -722,13 +714,11 @@ ftleaf_get_split_loc(
         uint64_t sumlesizes = ftleaf_disk_size(node);
         uint32_t size_so_far = 0;
         for (int i = 0; i < node->n_children; i++) {
-            OMT curr_buffer = BLB_BUFFER(node, i);
-            uint32_t n_leafentries = toku_omt_size(curr_buffer);
+            bn_data* curr_bn_data = BLB_DATA(node, i);
+            uint32_t n_leafentries = curr_bn_data->get_num_entries();
             for (uint32_t j=0; j < n_leafentries; j++) {
-                OMTVALUE lev;
-                int r = toku_omt_fetch(curr_buffer, j, &lev);
-                assert_zero(r);
-                LEAFENTRY CAST_FROM_VOIDP(curr_le, lev);
+                LEAFENTRY curr_le = NULL;
+                int r = curr_bn_data->fetch_leafentry(j, &curr_le);
                 size_so_far += leafentry_disksize(curr_le);
                 if (size_so_far >= sumlesizes/2) {
                     *num_left_bns = i + 1;
@@ -741,7 +731,7 @@ ftleaf_get_split_loc(
                             (*num_left_les)--;
                         } else if (*num_left_bns > 1) {
                             (*num_left_bns)--;
-                            *num_left_les = toku_omt_size(BLB_BUFFER(node, *num_left_bns - 1));
+                            *num_left_les = BLB_DATA(node, *num_left_bns - 1)->get_num_entries();
                         } else {
                             // we are trying to split a leaf with only one
                             // leafentry in it
@@ -759,7 +749,6 @@ exit:
     return;
 }
 
-// TODO: (Zardosht) possibly get rid of this function and use toku_omt_split_at in
 // ftleaf_split
 static void
 move_leafentries(

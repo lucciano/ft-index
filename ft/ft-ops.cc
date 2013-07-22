@@ -405,7 +405,7 @@ get_leaf_num_entries(FTNODE node) {
     int i;
     toku_assert_entire_node_in_memory(node);
     for ( i = 0; i < node->n_children; i++) {
-        result += toku_omt_size(BLB_BUFFER(node, i));
+        result += BLB_DATA(node, i)->get_num_entries();
     }
     return result;
 }
@@ -610,15 +610,7 @@ ftnode_memory_size (FTNODE node)
             else {
                 BASEMENTNODE bn = BLB(node, i);
                 retval += sizeof(*bn);
-                {
-                    // include fragmentation overhead but do not include space in the
-                    // mempool that has not yet been allocated for leaf entries
-                    size_t poolsize = toku_mempool_footprint(&bn->buffer_mempool);
-                    invariant (poolsize >= BLB_NBYTESINBUF(node,i));
-                    retval += poolsize;
-                }
-                OMT curr_omt = BLB_BUFFER(node, i);
-                retval += (toku_omt_memory_size(curr_omt));
+                retval += BLB_DATA(node, i)->get_memory_size();
             }
         }
         else {
@@ -1468,6 +1460,7 @@ void toku_ftnode_free(FTNODE *nodep) {
     FTNODE node = *nodep;
     if (node->height == 0) {
         for (int i = 0; i < node->n_children; i++) {
+            asdf; // figure this out, why is this not taken care of in toku_destroy_ftnode_internals?
             if (BP_STATE(node,i) == PT_AVAIL) {
                 struct mempool * mp = &(BLB_BUFFER_MEMPOOL(node, i));
                 toku_mempool_destroy(mp);
@@ -6299,13 +6292,12 @@ toku_dump_ftnode (FILE *file, FT_HANDLE brt, BLOCKNUM blocknum, int depth, const
                              });
             }
             else {
-                int size = toku_omt_size(BLB_BUFFER(node, i));
+                int size = BLB_DATA(node,i)->get_num_entries();
                 if (0)
                     for (int j=0; j<size; j++) {
-                        OMTVALUE v = 0;
-                        int r = toku_omt_fetch(BLB_BUFFER(node, i), j, &v);
+                        LEAFENTRY le;
+                        int r = BLB_DATA(node, i)->fetch_leafentry(j, &le);
                         assert_zero(r);
-                        LEAFENTRY CAST_FROM_VOIDP(le, v);
                         fprintf(file, " [%d]=", j);
                         print_leafentry(file, le);
                         fprintf(file, "\n");
@@ -6480,7 +6472,7 @@ static bool is_empty_fast_iter (FT_HANDLE brt, FTNODE node) {
     } else {
         // leaf:  If the omt is empty, we are happy.
         for (int i = 0; i < node->n_children; i++) {
-            if (toku_omt_size(BLB_BUFFER(node, i))) {
+            if (BLB_DATA(node, i)->get_num_entries() > 0) {
                 return false;
             }
         }
