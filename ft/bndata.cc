@@ -117,4 +117,15 @@ int bn_data::fetch_leafentry(uint32_t idx, LEAFENTRY* le) {
     return r;
 }
 
+void bn_data::delete_leafentry (uint32_t idx, LEAFENTRY le) {
+    {
+        int r = toku_omt_delete_at(m_buffer, idx);
+        assert_zero(r);
+    }
+
+    m_n_bytes_in_buffer -= leafentry_disksize(le);
+
+    toku_mempool_mfree(&m_buffer_mempool, 0, leafentry_memsize(le)); // Must pass 0, since le is no good any more.
+}
+
 

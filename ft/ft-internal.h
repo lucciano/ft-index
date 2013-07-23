@@ -770,17 +770,6 @@ static inline CACHETABLE_WRITE_CALLBACK get_write_callbacks_for_node(FT h) {
 
 static const FTNODE null_ftnode=0;
 
-// Values to be used to update ftcursor if a search is successful.
-struct ft_cursor_leaf_info_to_be {
-    uint32_t index;
-    OMT       omt;
-};
-
-// Values to be used to pin a leaf for shortcut searches
-struct ft_cursor_leaf_info {
-    struct ft_cursor_leaf_info_to_be  to_be;
-};
-
 /* a brt cursor is represented as a kv pair in a tree */
 struct ft_cursor {
     struct toku_list cursors_link;
@@ -796,7 +785,6 @@ struct ft_cursor {
     int out_of_range_error;
     int direction;
     TOKUTXN ttxn;
-    struct ft_cursor_leaf_info  leaf_info;
 };
 
 //

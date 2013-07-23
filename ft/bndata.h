@@ -102,6 +102,7 @@ public:
     uint64_t get_memory_size();
     uint32_t get_num_entries();
     int fetch_leafentry(uint32_t idx, LEAFENTRY le);
+    void delete_leafentry (uint32_t idx, LEAFENTRY le);
 
 private:
     OMT m_buffer;                     // pointers to individual leaf entries
