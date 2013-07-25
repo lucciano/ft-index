@@ -143,12 +143,13 @@ void test_msg_modify_ule(ULE ule, FT_MSG msg);
 //////////////////////////////////////////////////////////////////////////////////////
 //Functions exported for test purposes only (used internally for non-test purposes).
 void le_unpack(ULE ule,  LEAFENTRY le);
-int le_pack(ULE ule,                            // data to be packed into new leafentry
-	    size_t *new_leafentry_memorysize,
-	    LEAFENTRY * const new_leafentry_p,  // this is what this function creates
-	    OMT *omtp,
-	    struct mempool *mp,
-	    void **maybe_free);
+int le_pack(ULE ule, // data to be packed into new leafentry
+        bn_data* data_buffer,
+        uint32_t idx,
+        uint32_t old_le_size,
+        LEAFENTRY old_le_space,
+        LEAFENTRY * const new_leafentry_p // this is what this function creates
+        );
 
 
 size_t le_memsize_from_ule (ULE ule);

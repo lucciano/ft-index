@@ -103,6 +103,8 @@ public:
     uint32_t get_num_entries();
     int fetch_leafentry(uint32_t idx, LEAFENTRY le);
     void delete_leafentry (uint32_t idx, LEAFENTRY le);
+    void get_space_for_overwrite(uint32_t idx, uint32_t old_size, void* old_le_space, uint32_t new_size, void** new_le_space);
+    void get_space_for_insert(uint32_t idx, uint32_t size, void** new_le_space);
 
 private:
     OMT m_buffer;                     // pointers to individual leaf entries

@@ -1703,16 +1703,17 @@ toku_ft_bn_apply_cmd_once (
 
         workdone_this_le = (oldsize > newsize ? oldsize : newsize);  // work done is max of le size before and after message application
 
-    } else {           // we did not just replace a row, so ...
+    } else {           
+        // we did not just replace a row, so ...
         if (le) {
-            //            ... we just deleted a row ...
+            // ... we just deleted a row ...
             // It was there, note that it's gone and remove it from the mempool
             ft_leaf_delete_leafentry (bn, idx, le);
             workdone_this_le = oldsize;
             numrows_delta = -1;
         }
         if (new_le) {
-            //            ... or we just added a row
+            // ... or we just added a row
             int r = toku_omt_insert_at(bn->buffer, new_le, idx);
             invariant(r==0);
             bn->n_bytes_in_buffer += newsize;

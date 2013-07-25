@@ -124,8 +124,43 @@ void bn_data::delete_leafentry (uint32_t idx, LEAFENTRY le) {
     }
 
     m_n_bytes_in_buffer -= leafentry_disksize(le);
-
     toku_mempool_mfree(&m_buffer_mempool, 0, leafentry_memsize(le)); // Must pass 0, since le is no good any more.
 }
+
+void bn_data::get_space_for_overwrite(
+    uint32_t idx,
+    uint32_t old_size,
+    LEAFENTRY old_le_space,
+    uint32_t new_size,
+    LEAFENTRY* new_le_space
+    ) 
+{
+    if (old_size >= new_size) {
+        // simple little optimization, reuse space allocated in mempool if possible
+        *new_le_space = old_le_space;
+        toku_mempool_mfree(m_buffer_mempool, NULL, old_size - new_size);
+    }
+    else {
+        void* maybe_free;
+        *new_le_space = mempool_malloc_from_omt(m_buffer, m_buffer_mempool, new_size, &maybe_free);
+        if (maybe_free) {
+            toku_free(maybe_free);
+        }
+        toku_omt_set_at(m_buffer, new_le_space, idx);
+    }
+    m_n_bytes_in_buffer += new_size;
+    m_n_bytes_in_buffer -= old_size;
+}
+
+void bn_data::get_space_for_insert(uint32_t idx, size_t size, LEAFENTRY* new_le_space) {
+    void* maybe_free;
+    *new_le_space = mempool_malloc_from_omt(m_buffer, m_buffer_mempool, size, &maybe_free);
+    if (maybe_free) {
+        toku_free(maybe_free);
+    }
+    toku_omt_insert_at(m_buffer, new_le_space, idx);
+    m_n_bytes_in_buffer += size;
+}
+
 
 
