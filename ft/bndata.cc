@@ -136,7 +136,12 @@ void bn_data::get_space_for_overwrite(
     ) 
 {
     if (old_size >= new_size) {
-        // simple little optimization, reuse space allocated in mempool if possible
+        // simple little optimization, reuse space allocated in mempool if possible,
+        //
+        //
+        // This may not be wise, as we need to check for fragmentation.
+        //
+        //
         *new_le_space = old_le_space;
         toku_mempool_mfree(m_buffer_mempool, NULL, old_size - new_size);
     }

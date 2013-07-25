@@ -555,11 +555,9 @@ bool toku_le_worth_running_garbage_collection(LEAFENTRY le, TXNID oldest_referen
 // entry with only one committed value.
 void
 toku_le_garbage_collect(LEAFENTRY old_leaf_entry,
+                        bn_data* data_buffer,
+                        uint32_t idx,
                         LEAFENTRY *new_leaf_entry,
-                        size_t *new_leaf_entry_memory_size,
-                        OMT *omtp,
-                        struct mempool *mp,
-                        void **maybe_free,
                         const xid_omt_t &snapshot_xids,
                         const rx_omt_t &referenced_xids,
                         const xid_omt_t &live_root_txns,
@@ -571,6 +569,7 @@ toku_le_garbage_collect(LEAFENTRY old_leaf_entry,
     le_unpack(&ule, old_leaf_entry);
 
     oldnumbytes = ule_get_innermost_numbytes(&ule);
+    uint32_t old_mem_size = leafentry_memsize(old_leaf_entry);
 
     // Before running garbage collection, try to promote the outermost provisional
     // entries to committed if its xid is older than the oldest possible live xid.
@@ -582,12 +581,14 @@ toku_le_garbage_collect(LEAFENTRY old_leaf_entry,
     ule_try_promote_provisional_outermost(&ule, oldest_possible_live_xid);
     ule_garbage_collect(&ule, snapshot_xids, referenced_xids, live_root_txns);
     
-    int r = le_pack(&ule,
-                    new_leaf_entry_memory_size,
-                    new_leaf_entry,
-                    omtp,
-                    mp,
-                    maybe_free);
+    int r = le_pack(
+        &ule,
+        data_buffer,
+        idx,
+        old_mem_size,
+        old_leaf_entry,
+        new_leaf_entry
+        );
     assert(r == 0);
     if (new_leaf_entry) {
         newnumbytes = ule_get_innermost_numbytes(&ule);
@@ -936,7 +937,9 @@ le_pack(ULE ule, // data to be packed into new leafentry
             }
         }
         *new_leafentry_p = NULL;
-        asdfjhasdfkjl;dfasjkl;adfskjl;dfaskjl;dasfkjl;asfkjl;asfdfsajdsafkjl;dsadfasjdfasjkl;fsad;lkjasdf; // Need to handle this. UGH!
+        if (data_buffer && old_le_size > 0) {
+            data_buffer->delete_leafentry(idx, old_le_space);
+        }
         rval = 0;
         goto cleanup;
     }
@@ -1044,6 +1047,8 @@ found_insert:;
     invariant(bytes_written == memsize);
          
 #if ULE_DEBUG
+// TODO: (Zardosht) figure out if this is useful
+/*
     if (omt) { //Disable recursive debugging.
         size_t memsize_verify = leafentry_memsize(new_leafentry);
         invariant(memsize_verify == memsize);
@@ -1067,6 +1072,7 @@ found_insert:;
 
         ule_cleanup(&ule_tmp);
     }
+*/
 #endif
 
     *new_leafentry_p = (LEAFENTRY)new_leafentry;
