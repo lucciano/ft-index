@@ -147,7 +147,12 @@ void bn_data::get_space_for_overwrite(
     }
     else {
         void* maybe_free;
-        *new_le_space = mempool_malloc_from_omt(m_buffer, m_buffer_mempool, new_size, &maybe_free);
+        *new_le_space = mempool_malloc_from_omt(
+            m_buffer, 
+            m_buffer_mempool,
+            new_size,
+            &maybe_free
+            );
         if (maybe_free) {
             toku_free(maybe_free);
         }
@@ -159,7 +164,12 @@ void bn_data::get_space_for_overwrite(
 
 void bn_data::get_space_for_insert(uint32_t idx, size_t size, LEAFENTRY* new_le_space) {
     void* maybe_free;
-    *new_le_space = mempool_malloc_from_omt(m_buffer, m_buffer_mempool, size, &maybe_free);
+    *new_le_space = mempool_malloc_from_omt(
+        m_buffer, 
+        m_buffer_mempool, 
+        size, 
+        &maybe_free
+        );
     if (maybe_free) {
         toku_free(maybe_free);
     }
@@ -167,5 +177,43 @@ void bn_data::get_space_for_insert(uint32_t idx, size_t size, LEAFENTRY* new_le_
     m_n_bytes_in_buffer += size;
 }
 
+int bn_data::find_zero(
+    int (*h)(OMTVALUE, void*extra), 
+    void* extra, 
+    LEAFENTRY* value, 
+    uint32_t* index
+    )
+{
+    OMTVALUE storeddatav = NULL;
+    int r = toku_omt_find_zero(m_buffer, h, extra, &storeddatav, index);    
+    if (r == DB_NOTFOUND) {
+        *value = NULL;
+    } 
+    else {
+        assert_zero(r);
+        CAST_FROM_VOIDP(*value, storeddatav);
+    }
+    return r;
+}
+
+int bn_data::find(
+    int (*h)(OMTVALUE, void*extra),
+    void*extra,
+    int direction,
+    LEAFENTRY *value,
+    uint32_t *index
+    )
+{
+    OMTVALUE storeddatav = NULL;
+    int r = toku_omt_find(m_buffer, h, extra, direction, &storeddatav, index);
+    if (r == DB_NOTFOUND) {
+        *value = NULL;
+    } 
+    else {
+        assert_zero(r);
+        CAST_FROM_VOIDP(*value, storeddatav);
+    }
+    return r;
+}
 
 
