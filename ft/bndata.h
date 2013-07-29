@@ -107,7 +107,7 @@ public:
     void get_space_for_insert(uint32_t idx, uint32_t size, void** new_le_space);
     int find_zero(int (*h)(OMTVALUE, void*extra), void* extra, LEAFENTRY* value, uint32_t* index);
     int find(int (*h)(OMTVALUE, void*extra), void*extra, int direction, LEAFENTRY *value, uint32_t *index);
-
+    int iterate_on_range(uint32_t left, uint32_t right, int (*f)(LEAFENTRY, uint32_t, void*), void* v);
 
 private:
     OMT m_buffer;                     // pointers to individual leaf entries

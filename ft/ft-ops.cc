@@ -6019,9 +6019,8 @@ struct get_key_after_bytes_iterate_extra {
     void *cb_extra;
 };
 
-static int get_key_after_bytes_iterate(OMTVALUE lev, uint32_t UU(idx), void *extra) {
+static int get_key_after_bytes_iterate(LEAFENTRY le, uint32_t UU(idx), void *extra) {
     struct get_key_after_bytes_iterate_extra *CAST_FROM_VOIDP(e, extra);
-    LEAFENTRY CAST_FROM_VOIDP(le, lev);
     uint32_t keylen;
     void *key = le_key_and_len(le, &keylen);
     // only checking the latest val, mvcc will make this inaccurate
@@ -6048,13 +6047,12 @@ static int get_key_after_bytes_in_basementnode(FT ft, BASEMENTNODE bn, const DBT
         assert(r == 0 || r == DB_NOTFOUND);
     }
     struct get_key_after_bytes_iterate_extra iter_extra = {skip_len, skipped, callback, cb_extra};
-    r = toku_omt_iterate_on_range(
-        bn->buffer,
+    r = bn->data_buffer.iterate_on_range(
         idx_left,
         bn->data_buffer.get_num_entries(),
         get_key_after_bytes_iterate,
         &iter_extra
-        );
+        )
     // Invert the sense of r == 0 (meaning the iterate finished, which means we didn't find what we wanted)
     if (r == 1) {
         r = 0;

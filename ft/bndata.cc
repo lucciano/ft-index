@@ -216,4 +216,36 @@ int bn_data::find(
     return r;
 }
 
+struct iterate_on_range_extra{
+    int (*f)(LEAFENTRY, uint32_t, void*);
+    void* v;
+};
+
+static int bndata_iterate_callback(OMTVALUE lev, uint32_t idx, void *extra) {
+    struct iterate_on_range_extra *CAST_FROM_VOIDP(e, extra);
+    LEAFENRTY le = NULL;
+    CAST_FROM_VOIDP(le, lev);
+    return e.f(le, idx, e.v);
+}
+
+int bn_data::iterate_on_range(
+    uint32_t left, 
+    uint32_t right, 
+    int (*f)(LEAFENTRY, uint32_t, void*), 
+    void* v
+    ) 
+{
+    struct iterate_on_range_extra extra;
+    extra.f = f;
+    extra.v = v;
+    int r = toku_omt_iterate_on_range(
+            m_buffer,
+            left,
+            right,
+            bndata_iterate_callback,
+            &extra
+            );
+    return r;
+}
+
 
