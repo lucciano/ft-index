@@ -727,11 +727,12 @@ test_indexer_undo_do(DB_INDEXER *indexer, DB *hotdb, DBT* key, ULEHANDLE ule) {
     struct ule_prov_info prov_info;
     memset(&prov_info, 0, sizeof(prov_info));
     // pass null for the leafentry - we don't need it, neither does the info
-    ule_prov_info_init(&prov_info, key->data, key->size, NULL, ule);
+    ule_prov_info_init(&prov_info, key->data, key->size, NULL, ule); // mallocs prov_info->key, owned by this function
     indexer_fill_prov_info(indexer, &prov_info);
     DBT_ARRAY *hot_keys = &indexer->i->hot_keys[which_db];
     DBT_ARRAY *hot_vals = &indexer->i->hot_vals[which_db];
     int r = indexer_undo_do(indexer, hotdb, &prov_info, hot_keys, hot_vals);
+    toku_free(prov_info.key);
     ule_prov_info_destroy(&prov_info);
     return r;
 }
