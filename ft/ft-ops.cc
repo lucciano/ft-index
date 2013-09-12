@@ -1964,6 +1964,12 @@ toku_ft_bn_apply_cmd (
             &idx
             );
         if (r==DB_NOTFOUND) {
+            {
+                //Point to msg's copy of the key so we don't worry about le being freed
+                //TODO: 46 MAYBE Get rid of this when le_apply message memory is better handled
+                key = cmd->u.id.key->data;
+                keylen = cmd->u.id.key->size;
+            }
             r = do_update(update_fun, desc, bn, cmd, idx, NULL, NULL, 0, oldest_referenced_xid_known, gc_info, workdone, stats_to_update);
         } else if (r==0) {
             r = do_update(update_fun, desc, bn, cmd, idx, storeddata, key, keylen, oldest_referenced_xid_known, gc_info, workdone, stats_to_update);
@@ -1979,6 +1985,12 @@ toku_ft_bn_apply_cmd (
             uint32_t curr_keylen = 0;
             r = bn->data_buffer.fetch_klpair(idx, &storeddata, &curr_keylen, &curr_key);
             assert_zero(r);
+
+            //TODO: 46 replace this with something better than cloning key
+            char clone_mem[curr_keylen];  // only lasts one loop, alloca would overflow (end of function)
+            memcpy((void*)clone_mem, curr_key, curr_keylen);
+            curr_key = (void*)clone_mem;
+
             // This is broken below. Have a compilation error checked
             // in as a reminder
             r = do_update(update_fun, desc, bn, cmd, idx, storeddata, curr_key, curr_keylen, oldest_referenced_xid_known, gc_info, workdone, stats_to_update);
