@@ -584,6 +584,7 @@ run_test(char *envdir, char *testname) {
     ZERO_STRUCT(saved);
     // read the test
     DBT key;
+    ZERO_STRUCT(key);
     r = read_test(testname, ule, &key, &saved);
     if (r != 0)
         return r;
