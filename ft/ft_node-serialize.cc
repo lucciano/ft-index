@@ -2049,7 +2049,6 @@ deserialize_and_upgrade_leaf_node(FTNODE node,
             assert_zero(r);
             // Copy the pointer value straight into the OMT
             LEAFENTRY new_le_in_bn = nullptr;
-            // le_key and le_keylen usage here is temporary
             bn->data_buffer.get_space_for_insert(
                 i,
                 key,

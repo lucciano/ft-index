@@ -1028,11 +1028,11 @@ struct garbage_helper_extra {
 };
 
 static int
-garbage_leafentry_helper(const void* key UU(), const uint32_t keylen UU(), const LEAFENTRY & le, uint32_t UU(idx), struct garbage_helper_extra * const info) {
+garbage_leafentry_helper(const void* key UU(), const uint32_t keylen, const LEAFENTRY & le, uint32_t UU(idx), struct garbage_helper_extra * const info) {
     //TODO #warning need to reanalyze for split
     info->total_space += leafentry_disksize(le);
     if (!le_latest_is_del(le)) {
-        info->used_space += LE_CLEAN_MEMSIZE(le_keylen(le), le_latest_vallen(le));
+        info->used_space += LE_CLEAN_MEMSIZE(keylen, le_latest_vallen(le));
     }
     return 0;
 }
