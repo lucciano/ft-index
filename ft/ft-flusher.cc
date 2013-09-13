@@ -707,7 +707,7 @@ ftleaf_get_split_loc(
             uint32_t n_leafentries = bd->omt_size();
             for (uint32_t j=0; j < n_leafentries; j++) {
                 size_t size_this_le;
-                int rr = bd->fetch_le_disksize(j, &size_this_le);
+                int rr = bd->fetch_klpair_disksize(j, &size_this_le);
                 invariant_zero(rr);
                 size_so_far += size_this_le;
                 if (size_so_far >= sumlesizes/2) {

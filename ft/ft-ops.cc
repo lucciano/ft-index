@@ -211,6 +211,7 @@ basement nodes, bulk fetch,  and partial fetch:
 #include "txn_manager.h"
 #include "leafentry.h"
 #include "xids.h"
+#include "ft_msg.h"
 
 #include <toku_race_tools.h>
 
@@ -1639,9 +1640,9 @@ toku_ft_bn_apply_cmd_once (
     LEAFENTRY new_le=0;
     int64_t numbytes_delta = 0;  // how many bytes of user data (not including overhead) were added or deleted from this row
     int64_t numrows_delta = 0;   // will be +1 or -1 or 0 (if row was added or deleted or not)
-
+    uint32_t key_storage_size = ft_msg_get_keylen(cmd) + sizeof(uint32_t);
     if (le) {
-        oldsize = leafentry_memsize(le);
+        oldsize = leafentry_memsize(le) + key_storage_size;
     }
     
     // toku_le_apply_msg() may call mempool_malloc_from_omt() to allocate more space.
@@ -1658,7 +1659,7 @@ toku_ft_bn_apply_cmd_once (
         &numbytes_delta
         );
 
-    newsize = new_le ? leafentry_disksize(new_le) : 0;
+    newsize = new_le ? (leafentry_memsize(new_le) +  + key_storage_size) : 0;
     if (le && new_le) {
         workdone_this_le = (oldsize > newsize ? oldsize : newsize);  // work done is max of le size before and after message application
 
@@ -1909,8 +1910,15 @@ toku_ft_bn_apply_cmd (
         // Apply to all leafentries
         omt_size = bn->data_buffer.omt_size();
         for (uint32_t idx = 0; idx < omt_size; ) {
-            r = bn->data_buffer.fetch_le(idx, &storeddata);
+            DBT curr_keydbt;
+            void* curr_keyp = NULL;
+            uint32_t curr_keylen = 0;
+            r = bn->data_buffer.fetch_klpair(idx, &storeddata, &curr_keylen, &curr_keyp);
             assert_zero(r);
+            toku_fill_dbt(&curr_keydbt, curr_keyp, curr_keylen);
+            // because this is a broadcast message, we need
+            // to fill the key in the msg that we pass into toku_ft_bn_apply_cmd_once
+            cmd->u.id.key = &curr_keydbt;
             int deleted = 0;
             if (!le_is_clean(storeddata)) { //If already clean, nothing to do.
                 toku_ft_bn_apply_cmd_once(bn, cmd, idx, storeddata, oldest_referenced_xid_known, gc_info, workdone, stats_to_update);
@@ -1934,8 +1942,15 @@ toku_ft_bn_apply_cmd (
         // Apply to all leafentries if txn is represented
         omt_size = bn->data_buffer.omt_size();
         for (uint32_t idx = 0; idx < omt_size; ) {
-            r = bn->data_buffer.fetch_le(idx, &storeddata);
+            DBT curr_keydbt;
+            void* curr_keyp = NULL;
+            uint32_t curr_keylen = 0;
+            r = bn->data_buffer.fetch_klpair(idx, &storeddata, &curr_keylen, &curr_keyp);
             assert_zero(r);
+            toku_fill_dbt(&curr_keydbt, curr_keyp, curr_keylen);
+            // because this is a broadcast message, we need
+            // to fill the key in the msg that we pass into toku_ft_bn_apply_cmd_once
+            cmd->u.id.key = &curr_keydbt;
             int deleted = 0;
             if (le_has_xids(storeddata, cmd->xids)) {
                 toku_ft_bn_apply_cmd_once(bn, cmd, idx, storeddata, oldest_referenced_xid_known, gc_info, workdone, stats_to_update);
@@ -1987,6 +2002,8 @@ toku_ft_bn_apply_cmd (
             assert_zero(r);
 
             //TODO: 46 replace this with something better than cloning key
+            // TODO: (Zardosht) This may be unnecessary now, due to how the key
+            // is handled in the bndata. Investigate and determine
             char clone_mem[curr_keylen];  // only lasts one loop, alloca would overflow (end of function)
             memcpy((void*)clone_mem, curr_key, curr_keylen);
             curr_key = (void*)clone_mem;
@@ -2228,6 +2245,8 @@ ft_nonleaf_put_cmd (ft_compare_func compare_fun, DESCRIPTOR desc, FTNODE node, i
 static void
 ft_basement_node_gc_once(BASEMENTNODE bn,
                           uint32_t index,
+                          void* keyp,
+                          uint32_t keylen,
                           LEAFENTRY leaf_entry,
                           const xid_omt_t &snapshot_xids,
                           const rx_omt_t &referenced_xids,
@@ -2263,6 +2282,8 @@ ft_basement_node_gc_once(BASEMENTNODE bn,
     toku_le_garbage_collect(leaf_entry,
                             &bn->data_buffer,
                             index,
+                            keyp,
+                            keylen,
                             &new_leaf_entry,
                             snapshot_xids,
                             referenced_xids,
@@ -2306,10 +2327,23 @@ basement_node_gc_all_les(BASEMENTNODE bn,
     uint32_t index = 0;
     uint32_t num_leafentries_before;
     while (index < (num_leafentries_before = bn->data_buffer.omt_size())) {
+        void* keyp = NULL;
+        uint32_t keylen = 0;
         LEAFENTRY leaf_entry;
-        bn->data_buffer.fetch_le(index, &leaf_entry);
+        bn->data_buffer.fetch_klpair(index, &leaf_entry, &keylen, &keyp);
         assert_zero(r);
-        ft_basement_node_gc_once(bn, index, leaf_entry, snapshot_xids, referenced_xids, live_root_txns, oldest_referenced_xid_known, delta);
+        ft_basement_node_gc_once(
+            bn,
+            index,
+            keyp,
+            keylen,
+            leaf_entry,
+            snapshot_xids,
+            referenced_xids,
+            live_root_txns,
+            oldest_referenced_xid_known,
+            delta
+            );
         // Check if the leaf entry was deleted or not.
         if (num_leafentries_before == bn->data_buffer.omt_size()) {
             ++index;

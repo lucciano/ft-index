@@ -132,18 +132,17 @@ PATENT RIGHTS GRANT:
 enum { LE_CLEAN = 0, LE_MVCC = 1 };
 
 // This is an on-disk format.  static_asserts verify everything is packed and aligned correctly.
-struct __attribute__ ((__packed__)) leafentry {
+struct leafentry {
     struct leafentry_clean {
         uint32_t vallen;
-        uint8_t  key_val[0];     //Actual key, then actual val
+        uint8_t  val[0];     //actual val
     }; // For the case where LEAFENTRY->type is LE_CLEAN
     static_assert(4 == sizeof(leafentry::leafentry_clean), "leafentry_clean size is wrong");
-    static_assert(4 == __builtin_offsetof(leafentry::leafentry_clean, key_val), "key_val is in the wrong place");
+    static_assert(4 == __builtin_offsetof(leafentry::leafentry_clean, val), "val is in the wrong place");
     struct __attribute__ ((__packed__)) leafentry_mvcc {
         uint32_t num_cxrs; // number of committed transaction records
         uint8_t  num_pxrs; // number of provisional transaction records
-        uint8_t key_xrs[0]; //Actual key,
-                             //then TXNIDs of XRs relevant for reads:
+        uint8_t xrs[0];      //then TXNIDs of XRs relevant for reads:
                              //  if provisional XRs exist, store OUTERMOST TXNID
                              //  store committed TXNIDs, from most recently committed to least recently committed (newest first)
                              //then lengths of XRs relevant for reads (length is at most 1<<31, MSB is 1 for insert, 0 for delete):
@@ -167,37 +166,33 @@ struct __attribute__ ((__packed__)) leafentry {
                              //   (innermost data and length with insert/delete flag are stored above, cannot be a placeholder)
     }; // For the case where LEAFENTRY->type is LE_MVCC
     static_assert(5 == sizeof(leafentry::leafentry_mvcc), "leafentry_mvcc size is wrong");
-    static_assert(5 == __builtin_offsetof(leafentry::leafentry_mvcc, key_xrs), "key_xrs is in the wrong place");
+    static_assert(5 == __builtin_offsetof(leafentry::leafentry_mvcc, xrs), "xrs is in the wrong place");
 
     uint8_t  type;    // type is LE_CLEAN or LE_MVCC
-    uint32_t keylen;
+    //uint32_t keylen;
     union __attribute__ ((__packed__)) {
         struct leafentry_clean clean;
         struct leafentry_mvcc mvcc;
     } u;
 };
-static_assert(10 == sizeof(leafentry), "leafentry size is wrong");
-static_assert(5 == __builtin_offsetof(leafentry, u), "union is in the wrong place");
+static_assert(6 == sizeof(leafentry), "leafentry size is wrong");
+static_assert(1 == __builtin_offsetof(leafentry, u), "union is in the wrong place");
 
-#define LE_CLEAN_MEMSIZE(_keylen, _vallen)                       \
+#define LE_CLEAN_MEMSIZE(_vallen)                       \
     (sizeof(((LEAFENTRY)NULL)->type)            /* type */       \
-    +sizeof(((LEAFENTRY)NULL)->keylen)          /* keylen */     \
     +sizeof(((LEAFENTRY)NULL)->u.clean.vallen)  /* vallen */     \
-    +(_keylen)                                    /* actual key */     \
     +(_vallen))                                   /* actual val */
 
 #define LE_MVCC_COMMITTED_HEADER_MEMSIZE                          \
     (sizeof(((LEAFENTRY)NULL)->type)            /* type */        \
-    +sizeof(((LEAFENTRY)NULL)->keylen)          /* keylen */      \
     +sizeof(((LEAFENTRY)NULL)->u.mvcc.num_cxrs) /* committed */   \
     +sizeof(((LEAFENTRY)NULL)->u.mvcc.num_pxrs) /* provisional */ \
     +sizeof(TXNID)                              /* transaction */ \
     +sizeof(uint32_t)                           /* length+bit */  \
     +sizeof(uint32_t))                          /* length+bit */ 
 
-#define LE_MVCC_COMMITTED_MEMSIZE(_keylen, _vallen)    \
+#define LE_MVCC_COMMITTED_MEMSIZE(_vallen)    \
     (LE_MVCC_COMMITTED_HEADER_MEMSIZE                \
-    +(_keylen)                        /* actual key */ \
     +(_vallen))                       /* actual val */
 
 
@@ -208,6 +203,8 @@ typedef struct leafentry_13 *LEAFENTRY_13;
 // TODO: consistency among names is very poor.
 //
 
+// TODO: rename this helper function for deserialization
+size_t leafentry_rest_memsize(uint32_t num_puxrs, uint32_t num_cuxrs, uint8_t* start);
 size_t leafentry_memsize (LEAFENTRY le); // the size of a leafentry in memory.
 size_t leafentry_disksize (LEAFENTRY le); // this is the same as logsizeof_LEAFENTRY.  The size of a leafentry on disk.
 void wbuf_nocrc_LEAFENTRY(struct wbuf *w, LEAFENTRY le);
@@ -219,11 +216,6 @@ bool le_has_xids(LEAFENTRY le, XIDS xids); // Return true transaction represente
 void*     le_latest_val (LEAFENTRY le); // Return the latest val (return NULL for provisional deletes)
 uint32_t le_latest_vallen (LEAFENTRY le); // Return the latest vallen.  Returns 0 for provisional deletes.
 void* le_latest_val_and_len (LEAFENTRY le, uint32_t *len);
-
- // Return any key or value (even if it's only provisional).
-void* le_key (const LEAFENTRY le);
-uint32_t le_keylen (const LEAFENTRY le);
-void* le_key_and_len (const LEAFENTRY le, uint32_t *len);
 
 uint64_t le_outermost_uncommitted_xid (LEAFENTRY le);
 
@@ -265,6 +257,8 @@ void
 toku_le_garbage_collect(LEAFENTRY old_leaf_entry,
                         bn_data* data_buffer,
                         uint32_t idx,
+                        void* keyp,
+                        uint32_t keylen,
                         LEAFENTRY *new_leaf_entry,
                         const xid_omt_t &snapshot_xids,
                         const rx_omt_t &referenced_xids,

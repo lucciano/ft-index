@@ -94,6 +94,10 @@ static uint32_t klpair_size(KLPAIR klpair){
     return sizeof(*klpair) + klpair->keylen + leafentry_memsize(get_le_from_klpair(klpair));
 }
 
+static uint32_t klpair_disksize(KLPAIR klpair){
+    return sizeof(*klpair) + klpair->keylen + leafentry_disksize(get_le_from_klpair(klpair));
+}
+
 void bn_data::init_zero() {
     toku_mempool_zero(&m_buffer_mempool);
 }
@@ -109,14 +113,14 @@ void bn_data::initialize_from_data(uint32_t num_entries, unsigned char *buf, uin
     }
     KLPAIR *XMALLOC_N(num_entries, array); // create array of pointers to leafentries
     unsigned char *newmem = NULL;
-    CAST_FROM_VOIDP(newmem, toku_xmalloc(data_size*2)); // TODO: reduce this when we remove keys from leafentries 
+    // add same wiggle room that toku_mempool_construct would, 25% extra
+    CAST_FROM_VOIDP(newmem, toku_xmalloc(data_size + data_size/4)); 
     unsigned char* curr_src_pos = buf;
     unsigned char* curr_dest_pos = newmem;
     for (uint32_t i = 0; i < num_entries; i++) {
         KLPAIR curr_kl = (KLPAIR)curr_dest_pos;
         array[i] = curr_kl;
 
-        LEAFENTRY curr_le = (LEAFENTRY)curr_src_pos;
         uint8_t curr_type = curr_src_pos[0];
         curr_src_pos++;
         // first thing we do is lay out the key,
@@ -126,14 +130,20 @@ void bn_data::initialize_from_data(uint32_t num_entries, unsigned char *buf, uin
         void* keyp = NULL;
         keylen = *(uint32_t *)curr_src_pos;
         curr_src_pos += sizeof(uint32_t);
+        uint32_t clean_vallen = 0;
+        uint32_t num_cxrs = 0;
+        uint8_t num_pxrs = 0;
         if (curr_type == LE_CLEAN) {
-            curr_src_pos += sizeof(uint32_t); // val_len
+            clean_vallen = toku_dtoh32(*(uint32_t *)curr_src_pos);
+            curr_src_pos += sizeof(clean_vallen); // val_len
             keyp = curr_src_pos;
             curr_src_pos += keylen;
         }
         else {
             paranoid_invariant(curr_type == LE_MVCC);
+            num_cxrs = toku_htod32(*(uint32_t *)curr_src_pos);
             curr_src_pos += sizeof(uint32_t); // num_cxrs
+            num_pxrs = curr_src_pos[0];
             curr_src_pos += sizeof(uint8_t); //num_pxrs
             keyp = curr_src_pos;
             curr_src_pos += keylen;
@@ -145,16 +155,31 @@ void bn_data::initialize_from_data(uint32_t num_entries, unsigned char *buf, uin
         memcpy(curr_dest_pos, keyp, keylen);
         curr_dest_pos += keylen;
         // now curr_dest_pos is pointing to where the leafentry should be packed
-        
-        // curr_src_pos now points to where the "rest" of the leafentry ought to be
-        // This is hackish right now, will fix when removing key from leafentry
-        uint32_t curr_le_size = leafentry_memsize(curr_le);
-        memcpy(curr_dest_pos, curr_le, leafentry_memsize(curr_le));
-        curr_dest_pos += curr_le_size;
-        curr_src_pos = (unsigned char *)curr_le + curr_le_size;
+        curr_dest_pos[0] = curr_type;
+        curr_dest_pos++;
+        if (curr_type == LE_CLEAN) {
+             *(uint32_t *)curr_dest_pos = toku_htod32(clean_vallen);
+             curr_dest_pos += sizeof(clean_vallen);
+             memcpy(curr_dest_pos, curr_src_pos, clean_vallen); // copy the val
+             curr_dest_pos += clean_vallen;
+             curr_src_pos += clean_vallen;
+        }
+        else {
+            // pack num_cxrs and num_pxrs
+            *(uint32_t *)curr_dest_pos = toku_htod32(num_cxrs);
+            curr_dest_pos += sizeof(num_cxrs);
+            *(uint8_t *)curr_dest_pos = num_pxrs;
+            curr_dest_pos += sizeof(num_pxrs);
+            // now we need to pack the rest of the data
+            uint32_t num_rest_bytes = leafentry_rest_memsize(num_pxrs, num_cxrs, curr_src_pos);
+            memcpy(curr_dest_pos, curr_src_pos, num_rest_bytes);
+            curr_dest_pos += num_rest_bytes;
+            curr_src_pos += num_rest_bytes;
+        }
     }
-    paranoid_invariant(((uint32_t)(curr_src_pos - buf)) == data_size);
-    toku_mempool_init(&m_buffer_mempool, newmem, (size_t)(curr_dest_pos - newmem), data_size * 2);
+    uint32_t num_bytes_read UU() = (uint32_t)(curr_src_pos - buf);
+    paranoid_invariant( num_bytes_read == data_size);
+    toku_mempool_init(&m_buffer_mempool, newmem, (size_t)(curr_dest_pos - newmem), data_size);
 
     // destroy old omt that was created by toku_create_empty_bn(), so we can create a new one
     m_buffer.destroy();
@@ -166,7 +191,6 @@ uint64_t bn_data::get_memory_size() {
     // include fragmentation overhead but do not include space in the
     // mempool that has not yet been allocated for leaf entries
     size_t poolsize = toku_mempool_footprint(&m_buffer_mempool);
-    //TODO: (yoni) Make sure m_n_bytes_in_buffer is consistent.. with.. what?
     invariant(poolsize >= get_disk_size());
     retval += poolsize;
     retval += m_buffer.memory_size();
@@ -174,14 +198,13 @@ uint64_t bn_data::get_memory_size() {
 }
 
 void bn_data::delete_leafentry (
-    uint32_t idx, 
-    const void* keyp UU(),
+    uint32_t idx,
     uint32_t keylen,
-    LEAFENTRY le
+    uint32_t old_le_size
     ) 
 {
     m_buffer.delete_at(idx);
-    toku_mempool_mfree(&m_buffer_mempool, 0, leafentry_memsize(le) + keylen + sizeof(keylen)); // Must pass 0, since le is no good any more.
+    toku_mempool_mfree(&m_buffer_mempool, 0, old_le_size + keylen + sizeof(keylen)); // Must pass 0, since le is no good any more.
 }
 
 /* mempool support */
@@ -250,19 +273,22 @@ void bn_data::get_space_for_overwrite(
     )
 {
     void* maybe_free = nullptr;
+    uint32_t size_alloc = new_size + keylen + sizeof(keylen);
     KLPAIR new_kl = mempool_malloc_from_omt(
-        new_size + keylen + sizeof(keylen),
+        size_alloc,
         &maybe_free
         );
-    //TODO: See if we can improve perf? by freeing first?  But then compress kvspace recopies it!
-    toku_mempool_mfree(&m_buffer_mempool, nullptr, old_le_size + keylen + sizeof(keylen));  // Must pass nullptr, since le is no good any more.
-    if (maybe_free) {
-        toku_free(maybe_free);
-    }
+    uint32_t size_freed = old_le_size + keylen + sizeof(keylen);
+    toku_mempool_mfree(&m_buffer_mempool, nullptr, size_freed);  // Must pass nullptr, since le is no good any more.
     new_kl->keylen = keylen;
     memcpy(new_kl->key_le, keyp, keylen);
     m_buffer.set_at(new_kl, idx);
     *new_le_space = get_le_from_klpair(new_kl);
+    // free at end, so that the keyp and keylen
+    // passed in is still valid
+    if (maybe_free) {
+        toku_free(maybe_free);
+    }
 }
 
 //TODO: probably not free the "maybe_free" right away?
@@ -275,8 +301,9 @@ void bn_data::get_space_for_insert(
     )
 {
     void* maybe_free = nullptr;
+    uint32_t size_alloc = size + keylen + sizeof(keylen);
     KLPAIR new_kl = mempool_malloc_from_omt(
-        size + keylen + sizeof(keylen),
+        size_alloc,
         &maybe_free
         );
     if (maybe_free) {
@@ -287,9 +314,6 @@ void bn_data::get_space_for_insert(
     m_buffer.insert_at(new_kl, idx);
     *new_le_space = get_le_from_klpair(new_kl);
 }
-
-//TODO: implement the rest (e.g. above)
-//#warning Yoni did only below
 
 void bn_data::move_leafentries_to(
      BN_DATA dest_bd,
@@ -328,7 +352,6 @@ void bn_data::move_leafentries_to(
 }
 
 uint64_t bn_data::get_disk_size() {
-    //TODO: any reason why we can't just do this?  As opposed to keeping track of a number manually.
     return toku_mempool_get_used_space(&m_buffer_mempool);
 }
 
@@ -353,7 +376,7 @@ void bn_data::replace_contents_with_clone_of_sorted_array(
     uint32_t* old_keylens,
     LEAFENTRY* old_les, 
     size_t *le_sizes, 
-    size_t mempool_size // TODO: make sure mempool_size is properly passed in
+    size_t mempool_size
     ) 
 {
     toku_mempool_construct(&m_buffer_mempool, mempool_size);
@@ -384,7 +407,6 @@ int bn_data::fetch_le(uint32_t idx, LEAFENTRY *le) {
     return r;
 }
 
-//TODO: reimplement if/when we split keys and vals
 int bn_data::fetch_klpair(uint32_t idx, LEAFENTRY *le, uint32_t *len, void** key) {
     KLPAIR klpair = NULL;
     int r = m_buffer.fetch(idx, &klpair);
@@ -396,18 +418,15 @@ int bn_data::fetch_klpair(uint32_t idx, LEAFENTRY *le, uint32_t *len, void** key
     return r;
 }
 
-//TODO: reimplement if/when we split keys and vals
-int bn_data::fetch_le_disksize(uint32_t idx, size_t *size) {
+int bn_data::fetch_klpair_disksize(uint32_t idx, size_t *size) {
     KLPAIR klpair = NULL;
     int r = m_buffer.fetch(idx, &klpair);
     if (r == 0) {
-        LEAFENTRY le = get_le_from_klpair(klpair);
-        *size = leafentry_disksize(le);
+        *size = klpair_disksize(klpair);
     }
     return r;
 }
 
-//TODO: reimplement if/when we split keys and vals
 int bn_data::fetch_le_key_and_len(uint32_t idx, uint32_t *len, void** key) {
     KLPAIR klpair = NULL;
     int r = m_buffer.fetch(idx, &klpair);
@@ -439,7 +458,6 @@ void bn_data::clone(bn_data* orig_bn_data) {
     p.orig_base = toku_mempool_get_base(&orig_bn_data->m_buffer_mempool);
     p.new_base = toku_mempool_get_base(&m_buffer_mempool);
     p.omt = &m_buffer;
-    // TODO: fix this to use the right API
 
     int r = m_buffer.iterate_on_range<decltype(p), fix_mp_offset>(0, omt_size(), &p);
     invariant_zero(r);

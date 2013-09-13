@@ -1236,9 +1236,9 @@ static TXNID leafentry_xid(FTLOADER bl, int which_db) {
 size_t ft_loader_leafentry_size(size_t key_size, size_t val_size, TXNID xid) {
     size_t s = 0;
     if (xid == TXNID_NONE)
-        s = LE_CLEAN_MEMSIZE(key_size, val_size) + key_size + sizeof(uint32_t);
+        s = LE_CLEAN_MEMSIZE(val_size) + key_size + sizeof(uint32_t);
     else
-        s = LE_MVCC_COMMITTED_MEMSIZE(key_size, val_size) + key_size + sizeof(uint32_t);
+        s = LE_MVCC_COMMITTED_MEMSIZE(val_size) + key_size + sizeof(uint32_t);
     return s;
 }
 

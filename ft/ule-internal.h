@@ -128,8 +128,6 @@ typedef struct uxr {     // unpacked transaction record
 typedef struct ule {     // unpacked leaf entry
     uint32_t  num_puxrs;   // how many of uxrs[] are provisional
     uint32_t  num_cuxrs;   // how many of uxrs[] are committed
-    uint32_t  keylen;
-    void *    keyp;
     UXR_S     uxrs_static[MAX_TRANSACTION_RECORDS*2];    // uxrs[0] is oldest committed (txn commit time, not txn start time), uxrs[num_cuxrs] is outermost provisional value (if any exist/num_puxrs > 0)
     UXR       uxrs;                                      //If num_cuxrs < MAX_TRANSACTION_RECORDS then &uxrs_static[0].
                                                          //Otherwise we use a dynamically allocated array of size num_cuxrs + 1 + MAX_TRANSATION_RECORD.
@@ -147,8 +145,9 @@ int
 le_pack(ULE ule, // data to be packed into new leafentry
         bn_data* data_buffer,
         uint32_t idx,
+        void* keyp,
+        uint32_t keylen,
         uint32_t old_le_size,
-        LEAFENTRY old_le_space,
         LEAFENTRY * const new_leafentry_p // this is what this function creates
         );
 

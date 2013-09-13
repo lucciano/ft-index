@@ -121,12 +121,6 @@ static LEAFENTRY get_le_from_klpair(KLPAIR klpair){
     return le;
 }
 
-static void blah() {
-}
-
-//TODO: #warning make sure destroy destroys the mempool (OR IS THIS BAD?) Allow manual killing of it for now
-//TODO: #warning can't necessarily do this because of destroying basement nodes not doing it.. they might pass things along?
-
 template<typename omtcmp_t,
          int (*h)(const DBT &, const omtcmp_t &)>
 static int wrappy_fun_find(const KLPAIR &klpair, const omtcmp_t &extra) {
@@ -134,18 +128,15 @@ static int wrappy_fun_find(const KLPAIR &klpair, const omtcmp_t &extra) {
     DBT kdbt;
     kdbt.data = klpair->key_le;
     kdbt.size = klpair->keylen;
-    blah();
     return h(kdbt, extra);
 }
 
 template<typename iterate_extra_t,
          int (*h)(const void * key, const uint32_t keylen, const LEAFENTRY &, const uint32_t idx, iterate_extra_t *const)>
 static int wrappy_fun_iterate(const KLPAIR &klpair, const uint32_t idx, iterate_extra_t *const extra) {
-    //TODO: rewrite this function when we split
     uint32_t keylen = klpair->keylen;
     void* key = klpair->key_le;
     LEAFENTRY le = get_le_from_klpair(klpair);
-    blah();
     return h(key, keylen, le, idx, extra);
 }
 
@@ -176,7 +167,6 @@ public:
         return m_buffer.iterate_on_range< iterate_extra_t, wrappy_fun_iterate<iterate_extra_t, f> >(left, right, iterate_extra);
     }
 
-    //TODO: key/val split
     template<typename omtcmp_t,
              int (*h)(const DBT &, const omtcmp_t &)>
     int find_zero(const omtcmp_t &extra, LEAFENTRY *const value, void** key, uint32_t* keylen, uint32_t *const idxp) const {
@@ -198,7 +188,6 @@ public:
         return r;
     }
 
-    //TODO: key/val split
     template<typename omtcmp_t,
              int (*h)(const DBT &, const omtcmp_t &)>
     int find(const omtcmp_t &extra, int direction, LEAFENTRY *const value, void** key, uint32_t* keylen, uint32_t *const idxp) const {
@@ -223,7 +212,7 @@ public:
     // get info about a single leafentry by index
     int fetch_le(uint32_t idx, LEAFENTRY *le);
     int fetch_klpair(uint32_t idx, LEAFENTRY *le, uint32_t *len, void** key);
-    int fetch_le_disksize(uint32_t idx, size_t *size);
+    int fetch_klpair_disksize(uint32_t idx, size_t *size);
     int fetch_le_key_and_len(uint32_t idx, uint32_t *len, void** key);
 
     // Interact with another bn_data
@@ -248,9 +237,8 @@ public:
     void clone(bn_data* orig_bn_data);
     void delete_leafentry (
         uint32_t idx,
-        const void* keyp,
         uint32_t keylen,
-        LEAFENTRY le
+        uint32_t old_le_size
         );
     void get_space_for_overwrite(uint32_t idx, const void* keyp, uint32_t keylen, uint32_t old_size, uint32_t new_size, LEAFENTRY* new_le_space);
     void get_space_for_insert(uint32_t idx, const void* keyp, uint32_t keylen, size_t size, LEAFENTRY* new_le_space);

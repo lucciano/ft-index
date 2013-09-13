@@ -101,10 +101,10 @@ static TOKUTXN const null_txn = 0;
 static DB * const null_db = 0;
 
 static int
-get_next_callback(ITEMLEN UU(keylen), bytevec UU(key), ITEMLEN vallen, bytevec val, void *extra, bool lock_only) {
-    DBT *CAST_FROM_VOIDP(val_dbt, extra);
+get_next_callback(ITEMLEN keylen, bytevec key, ITEMLEN vallen UU(), bytevec val UU(), void *extra, bool lock_only) {
+    DBT *CAST_FROM_VOIDP(key_dbt, extra);
     if (!lock_only) {
-        toku_dbt_set(vallen, val, val_dbt, NULL);
+        toku_dbt_set(keylen, key, key_dbt, NULL);
     }
     return 0;
 }
@@ -246,18 +246,14 @@ test_pos_infinity(const char *fname, int n) {
     toku_init_dbt(&val); val.flags = DB_DBT_REALLOC;
 
     int i;
-    for (i = 0; ; i++) {
-        error = le_cursor_get_next(cursor, &val);
+    for (i=0; ; i++) {
+        error = le_cursor_get_next(cursor, &key);
         if (error != 0) 
             break;
         
-        LEAFENTRY le = (LEAFENTRY) val.data;
-        assert(le->type == LE_MVCC);
-        assert(le->keylen == sizeof (int));
-        int ii;
-        memcpy(&ii, le->u.mvcc.key_xrs, le->keylen);
+        assert(key.size == sizeof (int));
+        int ii = *(int *)key.data;
         assert((int) toku_htonl(i) == ii);
-
     }
     assert(i == n);
 
@@ -306,15 +302,12 @@ test_between(const char *fname, int n) {
     int i;
     for (i = 0; ; i++) {
         // move the LE_CURSOR forward
-        error = le_cursor_get_next(cursor, &val);
+        error = le_cursor_get_next(cursor, &key);
         if (error != 0) 
             break;
         
-        LEAFENTRY le = (LEAFENTRY) val.data;
-        assert(le->type == LE_MVCC);
-        assert(le->keylen == sizeof (int));
-        int ii;
-        memcpy(&ii, le->u.mvcc.key_xrs, le->keylen);
+        assert(key.size == sizeof (int));
+        int ii = *(int *)key.data;
         assert((int) toku_htonl(i) == ii);
 
         // test that 0 .. i is not right of the cursor

@@ -105,7 +105,7 @@ static const int eltsperbn = 256 / 64;  // bnsize / eltsize
 static const int keylen = sizeof(long);
 // vallen is eltsize - keylen and leafentry overhead
 static const int vallen = 64 - sizeof(long) - (sizeof(((LEAFENTRY)NULL)->type)  // overhead from LE_CLEAN_MEMSIZE
-                                               +sizeof(((LEAFENTRY)NULL)->keylen)
+                                               +sizeof(uint32_t)
                                                +sizeof(((LEAFENTRY)NULL)->u.clean.vallen));
 #define dummy_msn_3884 ((MSN) { (uint64_t) 3884 * MIN_MSN.msn })
 
@@ -117,7 +117,7 @@ static void
 le_add_to_bn(bn_data* bn, uint32_t idx, const  char *key, int keysize, const char *val, int valsize)
 {
     LEAFENTRY r = NULL;
-    uint32_t size_needed = LE_CLEAN_MEMSIZE(keysize, valsize);
+    uint32_t size_needed = LE_CLEAN_MEMSIZE(valsize);
     bn->get_space_for_insert(
         idx, 
         key,
@@ -127,10 +127,8 @@ le_add_to_bn(bn_data* bn, uint32_t idx, const  char *key, int keysize, const cha
         );
     resource_assert(r);
     r->type = LE_CLEAN;
-    r->keylen = keysize;
     r->u.clean.vallen = valsize;
-    memcpy(&r->u.clean.key_val[0], key, keysize);
-    memcpy(&r->u.clean.key_val[keysize], val, valsize);
+    memcpy(r->u.clean.val, val, valsize);
 }
 
 
@@ -140,7 +138,7 @@ insert_dummy_value(FTNODE node, int bn, long k, uint32_t idx)
     char val[vallen];
     memset(val, k, sizeof val);
     le_add_to_bn(BLB_DATA(node, bn), idx,(char *) &k, keylen, val, vallen);
-    return LE_CLEAN_MEMSIZE(keylen, vallen);
+    return LE_CLEAN_MEMSIZE(vallen) + keylen + sizeof(uint32_t);
 }
 
 // TODO: this stuff should be in ft/ft-ops.cc, not in a test.
@@ -343,7 +341,7 @@ test_split_on_boundary_of_last_node(void)
             // the data combined, so the halfway mark will be just to its
             // left and just this element will end up on the right of the split
             big_val_size -= 1 + (sizeof(((LEAFENTRY)NULL)->type)  // overhead from LE_CLEAN_MEMSIZE
-                                 +sizeof(((LEAFENTRY)NULL)->keylen)
+                                 +sizeof(uint32_t) // sizeof(keylen)
                                  +sizeof(((LEAFENTRY)NULL)->u.clean.vallen));
             invariant(big_val_size <= maxbnsize);
             char * XMALLOC_N(big_val_size, big_val);
@@ -414,7 +412,7 @@ test_split_at_begin(void)
         invariant(totalbytes + 3 <= maxbnsize);
         memset(val, k, sizeof val);
         le_add_to_bn(BLB_DATA(&sn, bn), 0, (char *) &k, keylen, val, totalbytes + 3);
-        totalbytes += LE_CLEAN_MEMSIZE(keylen, totalbytes + 3);
+        totalbytes += LE_CLEAN_MEMSIZE(totalbytes + 3) + keylen + sizeof(uint32_t);
     }
 
     unlink(fname);
@@ -466,7 +464,7 @@ test_split_at_end(void)
                 invariant(totalbytes + 3 <= (long) maxbnsize);
                 memset(val, k, sizeof val);
                 le_add_to_bn(BLB_DATA(&sn, bn), i, (char *) &k, keylen, val, totalbytes + 3);
-                totalbytes += LE_CLEAN_MEMSIZE(keylen, totalbytes + 3);
+                totalbytes += LE_CLEAN_MEMSIZE(totalbytes + 3) + keylen + sizeof(uint32_t);
             } else {
                 totalbytes += insert_dummy_value(&sn, bn, k, i);
             }

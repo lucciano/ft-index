@@ -283,8 +283,27 @@ serialize_node_header(FTNODE node, FTNODE_DISK_DATA ndd, struct wbuf *wbuf) {
 }
 
 static int
-wbufwriteleafentry(const void* key UU(), const uint32_t keylen UU(), const LEAFENTRY &le, const uint32_t UU(idx), struct wbuf * const wb) {
-    wbuf_nocrc_LEAFENTRY(wb, le);
+wbufwriteleafentry(const void* key, const uint32_t keylen, const LEAFENTRY &le, const uint32_t UU(idx), struct wbuf * const wb) {
+    // need to pack the leafentry as it was in versions
+    // where the key was integrated into it
+    uint32_t begin_spot UU() = wb->ndone;
+    uint32_t le_disk_size = leafentry_disksize(le);
+    wbuf_nocrc_uint8_t(wb, le->type);
+    wbuf_nocrc_uint32_t(wb, keylen);
+    if (le->type == LE_CLEAN) {
+        wbuf_nocrc_uint32_t(wb, le->u.clean.vallen);
+        wbuf_nocrc_literal_bytes(wb, key, keylen);
+        wbuf_nocrc_literal_bytes(wb, le->u.clean.val, le->u.clean.vallen);
+    }
+    else {
+        paranoid_invariant(le->type == LE_MVCC);
+        wbuf_nocrc_uint32_t(wb, le->u.mvcc.num_cxrs);
+        wbuf_nocrc_uint8_t(wb, le->u.mvcc.num_pxrs);
+        wbuf_nocrc_literal_bytes(wb, key, keylen);
+        wbuf_nocrc_literal_bytes(wb, le->u.mvcc.xrs, le_disk_size - (1 + 4 + 1));
+    }
+    uint32_t end_spot UU() = wb->ndone;
+    paranoid_invariant((end_spot - begin_spot) == keylen + sizeof(keylen) + le_disk_size);
     return 0;
 }
 
@@ -363,16 +382,8 @@ serialize_ftnode_partition(FTNODE node, int i, struct sub_block *sb) {
     }
     uint32_t end_to_end_checksum = x1764_memory(sb->uncompressed_ptr, wbuf_get_woffset(&wb));
     wbuf_nocrc_int(&wb, end_to_end_checksum);
-    //
-    //
-    //
-    // TEMPORARY!
-    //
-    //
-    //
-    //invariant(wb.ndone == wb.size);
-    //invariant(sb->uncompressed_size==wb.ndone);
-    sb->uncompressed_size = wb.ndone;
+    invariant(wb.ndone == wb.size);
+    invariant(sb->uncompressed_size==wb.ndone);
 }
 
 //
@@ -581,7 +592,7 @@ rebalance_ftnode_leaf(FTNODE node, unsigned int basementnodesize)
     uint32_t num_le_in_curr_bn = 0;
     uint32_t bn_size_so_far = 0;
     for (uint32_t i = 0; i < num_le; i++) {
-        uint32_t curr_le_size = leafentry_disksize((LEAFENTRY) leafpointers[i]);
+        uint32_t curr_le_size = leafentry_disksize((LEAFENTRY) leafpointers[i]); 
         le_sizes[i] = curr_le_size;
         if ((bn_size_so_far + curr_le_size > basementnodesize) && (num_le_in_curr_bn != 0)) {
             // cap off the current basement node to end with the element before i
@@ -2041,12 +2052,9 @@ deserialize_and_upgrade_leaf_node(FTNODE node,
     BLB_SEQINSERT(node,0) = 0;
     BASEMENTNODE bn = BLB(node, 0);
 
-    // The current end of the buffer, read from disk and decompressed,
-    // is the start of the leaf entries.
-    uint32_t start_of_data = rb->ndone;
-
     // Read the leaf entries from the buffer, advancing the buffer
     // as we go.
+    bool has_end_to_end_checksum = (version >= FT_FIRST_LAYOUT_VERSION_WITH_END_TO_END_CHECKSUM);
     if (version <= FT_LAYOUT_VERSION_13) {
         // Create our mempool.
         // Loop through
@@ -2078,20 +2086,12 @@ deserialize_and_upgrade_leaf_node(FTNODE node,
             toku_free(new_le);
         }
     } else {
-        uint32_t end_of_data;
-        uint32_t data_size;
-
-        // Iterate over leaf entries to find the end
-        for (int i = 0; i < n_in_buf; ++i) {
-            LEAFENTRY le = reinterpret_cast<LEAFENTRY>(&rb->buf[rb->ndone]);
-            uint32_t disksize = leafentry_disksize(le);
-            rb->ndone += disksize;                       // 16. leaf entry (14)
-            invariant(rb->ndone <= rb->size);
+        uint32_t data_size = rb->size - rb->ndone;
+        if (has_end_to_end_checksum) {
+            data_size -= sizeof(uint32_t);
         }
-        end_of_data = rb->ndone;
-        data_size = end_of_data - start_of_data;
-
-        bn->data_buffer.initialize_from_data(n_in_buf, &rb->buf[start_of_data], data_size);
+        bn->data_buffer.initialize_from_data(n_in_buf, &rb->buf[rb->ndone], data_size);
+        rb->ndone += data_size;
     }
 
     // Whatever this is must be less than the MSNs of every message above
@@ -2101,7 +2101,7 @@ deserialize_and_upgrade_leaf_node(FTNODE node,
     node->max_msn_applied_to_node_on_disk = bn->max_msn_applied;
 
     // Checksum (end to end) is only on version 14
-    if (version >= FT_FIRST_LAYOUT_VERSION_WITH_END_TO_END_CHECKSUM) {
+    if (has_end_to_end_checksum) {
         uint32_t expected_xsum = rbuf_int(rb);             // 17. checksum 
         uint32_t actual_xsum = x1764_memory(rb->buf, rb->size - 4);
         if (expected_xsum != actual_xsum) {

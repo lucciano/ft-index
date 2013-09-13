@@ -171,18 +171,15 @@ static ULE
 ule_init(ULE ule) {
     ule->num_puxrs = 0;
     ule->num_cuxrs = 0;
-    ule->keyp = NULL;
-    ule->keylen = 0;
     ule->uxrs = ule->uxrs_static;
     return ule;
 }
 
 static void
 ule_destroy(ULE ule) {
-    for (unsigned int i = 0; i < ule->num_cuxrs + ule->num_puxrs; i++) 
+    for (unsigned int i = 0; i < ule->num_cuxrs + ule->num_puxrs; i++) {
         uxr_destroy(&ule->uxrs[i]);
-    toku_free(ule->keyp);
-    ule->keyp = NULL;
+    }
 }
 
 static void
@@ -592,6 +589,8 @@ run_test(char *envdir, char *testname) {
     r = indexer->i->undo_do(indexer, dest_db, &key, ule); assert_zero(r);
 
     ule_free(ule);
+    toku_free(key.data);
+    key.data = NULL;
 
     for (uint32_t i = 0; i < saved.used; i++) {
         toku_free(saved.savedlines[i]);

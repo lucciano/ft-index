@@ -1032,7 +1032,7 @@ garbage_leafentry_helper(const void* key UU(), const uint32_t keylen, const LEAF
     //TODO #warning need to reanalyze for split
     info->total_space += leafentry_disksize(le) + keylen + sizeof(keylen);
     if (!le_latest_is_del(le)) {
-        info->used_space += LE_CLEAN_MEMSIZE(keylen, le_latest_vallen(le));
+        info->used_space += LE_CLEAN_MEMSIZE(le_latest_vallen(le)) + keylen + sizeof(keylen);
     }
     return 0;
 }

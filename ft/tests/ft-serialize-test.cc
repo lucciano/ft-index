@@ -88,6 +88,7 @@ PATENT RIGHTS GRANT:
 #ident "Copyright (c) 2007, 2008 Tokutek Inc.  All rights reserved."
 
 #include "test.h"
+#include "bndata.h"
 
 
 
@@ -97,17 +98,14 @@ PATENT RIGHTS GRANT:
 
 static size_t
 calc_le_size(int keylen, int vallen) {
-    size_t rval;
-    LEAFENTRY le;
-    rval = sizeof(le->type) + sizeof(le->keylen) + sizeof(le->u.clean.vallen) + keylen + vallen;
-    return rval;
+    return LE_CLEAN_MEMSIZE(vallen) + keylen + sizeof(uint32_t);
 }
 
 static void
 le_add_to_bn(bn_data* bn, uint32_t idx, const  char *key, int keysize, const char *val, int valsize)
 {
     LEAFENTRY r = NULL;
-    uint32_t size_needed = LE_CLEAN_MEMSIZE(keysize, valsize);
+    uint32_t size_needed = LE_CLEAN_MEMSIZE(valsize);
     bn->get_space_for_insert(
         idx, 
         key,
@@ -117,28 +115,27 @@ le_add_to_bn(bn_data* bn, uint32_t idx, const  char *key, int keysize, const cha
         );
     resource_assert(r);
     r->type = LE_CLEAN;
-    r->keylen = keysize;
     r->u.clean.vallen = valsize;
-    memcpy(&r->u.clean.key_val[0], key, keysize);
-    memcpy(&r->u.clean.key_val[keysize], val, valsize);
+    memcpy(r->u.clean.val, val, valsize);
 }
 
-static LEAFENTRY
+static KLPAIR
 le_fastmalloc(struct mempool * mp, const char *key, int keylen, const char *val, int vallen)
 {
-    LEAFENTRY le;
+    KLPAIR kl;
     size_t le_size = calc_le_size(keylen, vallen);
-    CAST_FROM_VOIDP(le, toku_mempool_malloc(mp, le_size, 1));
-    resource_assert(le);
+    CAST_FROM_VOIDP(kl, toku_mempool_malloc(mp, le_size, 1));
+    resource_assert(kl);
+    kl->keylen = keylen;
+    memcpy(kl->key_le, key, keylen);
+    LEAFENTRY le = get_le_from_klpair(kl);
     le->type = LE_CLEAN;
-    le->keylen = keylen;
     le->u.clean.vallen = vallen;
-    memcpy(&le->u.clean.key_val[0], key, keylen);
-    memcpy(&le->u.clean.key_val[keylen], val, vallen);
-    return le;
+    memcpy(le->u.clean.val, val, vallen);
+    return kl;
 }
 
-static LEAFENTRY
+static KLPAIR
 le_malloc(struct mempool * mp, const char *key, const char *val)
 {
     int keylen = strlen(key) + 1;
@@ -293,7 +290,7 @@ test_serialize_leaf_check_msn(enum ftnode_verify_type bft, bool do_clone) {
     BP_STATE(&sn,1) = PT_AVAIL;
     set_BLB(&sn, 0, toku_create_empty_bn());
     set_BLB(&sn, 1, toku_create_empty_bn());
-    LEAFENTRY elts[3];
+    KLPAIR elts[3];
     le_add_to_bn(BLB_DATA(&sn, 0), 0, "a", 2, "aval", 5);
     le_add_to_bn(BLB_DATA(&sn, 0), 1, "b", 2, "bval", 5);
     le_add_to_bn(BLB_DATA(&sn, 1), 0, "x", 2, "xval", 5);
@@ -368,11 +365,10 @@ test_serialize_leaf_check_msn(enum ftnode_verify_type bft, bool do_clone) {
                 uint32_t curr_keylen;
                 void* curr_key;
                 BLB_DATA(dn, bn)->fetch_klpair(i, &curr_le, &curr_keylen, &curr_key);
-                assert(leafentry_memsize(curr_le) == leafentry_memsize(elts[last_i]));
-                assert(memcmp(curr_le, elts[last_i], leafentry_memsize(curr_le)) == 0);
+                assert(leafentry_memsize(curr_le) == leafentry_memsize(get_le_from_klpair(elts[last_i])));
+                assert(memcmp(curr_le, get_le_from_klpair(elts[last_i]), leafentry_memsize(curr_le)) == 0);
                 if (bn < npartitions-1) {
-                    uint32_t keylen;
-                    assert(strcmp((char*)dn->childkeys[bn].data, (char*)le_key_and_len(elts[last_i], &keylen)) <= 0);
+                    assert(strcmp((char*)dn->childkeys[bn].data, (char*)(elts[last_i]->key_le)) <= 0);
                 }
                 // TODO for later, get a key comparison here as well
                 last_i++;
@@ -491,7 +487,7 @@ test_serialize_leaf_with_large_pivots(enum ftnode_verify_type bft, bool do_clone
         size_t le_size = calc_le_size(keylens, vallens);
         size_t mpsize = nrows * le_size;
         toku_mempool_construct(&dummy_mp, mpsize);
-        LEAFENTRY les[nrows];
+        KLPAIR les[nrows];
         {
             char key[keylens], val[vallens];
             key[keylens-1] = '\0';
@@ -516,11 +512,10 @@ test_serialize_leaf_with_large_pivots(enum ftnode_verify_type bft, bool do_clone
                 uint32_t curr_keylen;
                 void* curr_key;
                 BLB_DATA(dn, bn)->fetch_klpair(i, &curr_le, &curr_keylen, &curr_key);
-                assert(leafentry_memsize(curr_le) == leafentry_memsize(les[last_i]));
-                assert(memcmp(curr_le, les[last_i], leafentry_memsize(curr_le)) == 0);
+                assert(leafentry_memsize(curr_le) == leafentry_memsize(get_le_from_klpair(les[last_i])));
+                assert(memcmp(curr_le, get_le_from_klpair(les[last_i]), leafentry_memsize(curr_le)) == 0);
                 if (bn < npartitions-1) {
-                    uint32_t keylen;
-                    assert(strcmp((char*)dn->childkeys[bn].data, (char*)le_key_and_len(les[last_i], &keylen)) <= 0);
+                    assert(strcmp((char*)dn->childkeys[bn].data, (char*)(les[last_i]->key_le)) <= 0);
                 }
                 // TODO for later, get a key comparison here as well
                 last_i++;
@@ -630,7 +625,7 @@ test_serialize_leaf_with_many_rows(enum ftnode_verify_type bft, bool do_clone) {
         size_t le_size = calc_le_size(keylens, vallens);
         size_t mpsize = nrows * le_size;
         toku_mempool_construct(&dummy_mp, mpsize);
-        LEAFENTRY les[nrows];
+        KLPAIR les[nrows];
         {
             int key = 0, val = 0;
             for (uint32_t i = 0; i < nrows; ++i, key++, val++) {
@@ -652,11 +647,13 @@ test_serialize_leaf_with_many_rows(enum ftnode_verify_type bft, bool do_clone) {
                 uint32_t curr_keylen;
                 void* curr_key;
                 BLB_DATA(dn, bn)->fetch_klpair(i, &curr_le, &curr_keylen, &curr_key);
-                assert(leafentry_memsize(curr_le) == leafentry_memsize(les[last_i]));
-                assert(memcmp(curr_le, les[last_i], leafentry_memsize(curr_le)) == 0);
+                assert(leafentry_memsize(curr_le) == leafentry_memsize(get_le_from_klpair(les[last_i])));
+                assert(memcmp(curr_le, get_le_from_klpair(les[last_i]), leafentry_memsize(curr_le)) == 0);
                 if (bn < npartitions-1) {
-                    uint32_t keylen;
-                    assert(*((uint32_t *)dn->childkeys[bn].data) >= *((uint32_t*)le_key_and_len(les[last_i], &keylen)));
+                    uint32_t *CAST_FROM_VOIDP(pivot, dn->childkeys[bn].data);
+                    void* tmp = les[last_i]->key_le;
+                    uint32_t *CAST_FROM_VOIDP(item, tmp);
+                    assert(*pivot >= *item);
                 }
                 // TODO for later, get a key comparison here as well
                 last_i++;
@@ -775,7 +772,7 @@ test_serialize_leaf_with_large_rows(enum ftnode_verify_type bft, bool do_clone) 
         size_t le_size = calc_le_size(key_size, val_size);
         size_t mpsize = nrows * le_size;
         toku_mempool_construct(&dummy_mp, mpsize);
-        LEAFENTRY les[nrows];
+        KLPAIR les[nrows];
         {
             char key[key_size], val[val_size];
             key[key_size-1] = '\0';
@@ -803,11 +800,10 @@ test_serialize_leaf_with_large_rows(enum ftnode_verify_type bft, bool do_clone) 
                 uint32_t curr_keylen;
                 void* curr_key;
                 BLB_DATA(dn, bn)->fetch_klpair(i, &curr_le, &curr_keylen, &curr_key);
-                assert(leafentry_memsize(curr_le) == leafentry_memsize(les[last_i]));
-                assert(memcmp(curr_le, les[last_i], leafentry_memsize(curr_le)) == 0);
+                assert(leafentry_memsize(curr_le) == leafentry_memsize(get_le_from_klpair(les[last_i])));
+                assert(memcmp(curr_le, get_le_from_klpair(les[last_i]), leafentry_memsize(curr_le)) == 0);
                 if (bn < npartitions-1) {
-                    uint32_t keylen;
-                    assert(strcmp((char*)dn->childkeys[bn].data, (char*)le_key_and_len(les[last_i], &keylen)) <= 0);
+                    assert(strcmp((char*)dn->childkeys[bn].data, (char*)(les[last_i]->key_le)) <= 0);
                 }
                 // TODO for later, get a key comparison here as well
                 last_i++;
@@ -871,7 +867,7 @@ test_serialize_leaf_with_empty_basement_nodes(enum ftnode_verify_type bft, bool 
         set_BLB(&sn, i, toku_create_empty_bn());
         BLB_SEQINSERT(&sn, i) = 0;
     }
-    LEAFENTRY elts[3];
+    KLPAIR elts[3];
     le_add_to_bn(BLB_DATA(&sn, 1), 0, "a", 2, "aval", 5);
     le_add_to_bn(BLB_DATA(&sn, 3), 0, "b", 2, "bval", 5);
     le_add_to_bn(BLB_DATA(&sn, 5), 0, "x", 2, "xval", 5);
@@ -941,11 +937,10 @@ test_serialize_leaf_with_empty_basement_nodes(enum ftnode_verify_type bft, bool 
                 uint32_t curr_keylen;
                 void* curr_key;
                 BLB_DATA(dn, bn)->fetch_klpair(i, &curr_le, &curr_keylen, &curr_key);
-                assert(leafentry_memsize(curr_le) == leafentry_memsize(elts[last_i]));
-                assert(memcmp(curr_le, elts[last_i], leafentry_memsize(curr_le)) == 0);
+                assert(leafentry_memsize(curr_le) == leafentry_memsize(get_le_from_klpair(elts[last_i])));
+                assert(memcmp(curr_le, get_le_from_klpair(elts[last_i]), leafentry_memsize(curr_le)) == 0);
                 if (bn < npartitions-1) {
-                    uint32_t keylen;
-                    assert(strcmp((char*)dn->childkeys[bn].data, (char*)le_key_and_len(elts[last_i], &keylen)) <= 0);
+                    assert(strcmp((char*)dn->childkeys[bn].data, (char*)(elts[last_i]->key_le)) <= 0);
                 }
                 // TODO for later, get a key comparison here as well
                 last_i++;

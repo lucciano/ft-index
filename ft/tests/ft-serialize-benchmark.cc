@@ -103,7 +103,7 @@ static void
 le_add_to_bn(bn_data* bn, uint32_t idx, char *key, int keylen, char *val, int vallen)
 {
     LEAFENTRY r = NULL;
-    uint32_t size_needed = LE_CLEAN_MEMSIZE(keylen, vallen);
+    uint32_t size_needed = LE_CLEAN_MEMSIZE(vallen);
     bn->get_space_for_insert(
         idx, 
         key,
@@ -113,10 +113,8 @@ le_add_to_bn(bn_data* bn, uint32_t idx, char *key, int keylen, char *val, int va
         );
     resource_assert(r);
     r->type = LE_CLEAN;
-    r->keylen = keylen;
     r->u.clean.vallen = vallen;
-    memcpy(&r->u.clean.key_val[0], key, keylen);
-    memcpy(&r->u.clean.key_val[keylen], val, vallen);
+    memcpy(r->u.clean.val, val, vallen);
 }
 
 static int

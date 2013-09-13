@@ -335,7 +335,7 @@ struct ft_msg {
 // Message sent into brt to implement command (insert, delete, etc.)
 // This structure supports nested transactions, and obsoletes ft_msg.
 typedef struct ft_msg FT_MSG_S;
-typedef const struct ft_msg *FT_MSG;
+typedef struct ft_msg *FT_MSG;
 
 typedef int (*ft_compare_func)(DB *, const DBT *, const DBT *);
 typedef void (*setval_func)(const DBT *, void *);
