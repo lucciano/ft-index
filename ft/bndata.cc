@@ -90,6 +90,10 @@ PATENT RIGHTS GRANT:
 
 #include <bndata.h>
 
+static uint32_t klpair_size(KLPAIR klpair){
+    return sizeof(*klpair) + klpair->keylen + leafentry_memsize(get_le_from_klpair(klpair));
+}
+
 void bn_data::init_zero() {
     toku_mempool_zero(&m_buffer_mempool);
 }
@@ -103,19 +107,55 @@ void bn_data::initialize_from_data(uint32_t num_entries, unsigned char *buf, uin
     if (data_size == 0) {
         invariant_zero(num_entries);
     }
-    LEAFENTRY *XMALLOC_N(num_entries, array); // create array of pointers to leafentries
-    uint32_t curr_offset = 0;
-    toku_mempool_copy_construct(&m_buffer_mempool, buf, data_size);
-    uint8_t *CAST_FROM_VOIDP(le_base, toku_mempool_get_base(&m_buffer_mempool)); // point to first le in mempool
-    for (uint32_t i = 0; i < num_entries; i++) { // now set up the pointers in the omt
-        LEAFENTRY le = reinterpret_cast<LEAFENTRY>(&le_base[curr_offset]); // point to durable mempool, not to transient rbuf
-        uint32_t disksize = leafentry_disksize(le);
-        curr_offset += disksize;
-        invariant(curr_offset <= data_size);
-        array[i] = le;
+    KLPAIR *XMALLOC_N(num_entries, array); // create array of pointers to leafentries
+    unsigned char *newmem = NULL;
+    CAST_FROM_VOIDP(newmem, toku_xmalloc(data_size*2)); // TODO: reduce this when we remove keys from leafentries 
+    unsigned char* curr_src_pos = buf;
+    unsigned char* curr_dest_pos = newmem;
+    for (uint32_t i = 0; i < num_entries; i++) {
+        KLPAIR curr_kl = (KLPAIR)curr_dest_pos;
+        array[i] = curr_kl;
+
+        LEAFENTRY curr_le = (LEAFENTRY)curr_src_pos;
+        uint8_t curr_type = curr_src_pos[0];
+        curr_src_pos++;
+        // first thing we do is lay out the key,
+        // to do so, we must extract it from the leafentry
+        // and write it in
+        uint32_t keylen = 0;
+        void* keyp = NULL;
+        keylen = *(uint32_t *)curr_src_pos;
+        curr_src_pos += sizeof(uint32_t);
+        if (curr_type == LE_CLEAN) {
+            curr_src_pos += sizeof(uint32_t); // val_len
+            keyp = curr_src_pos;
+            curr_src_pos += keylen;
+        }
+        else {
+            paranoid_invariant(curr_type == LE_MVCC);
+            curr_src_pos += sizeof(uint32_t); // num_cxrs
+            curr_src_pos += sizeof(uint8_t); //num_pxrs
+            keyp = curr_src_pos;
+            curr_src_pos += keylen;
+        }
+        // now that we have the keylen and the key, we can copy it
+        // into the destination
+        *(uint32_t *)curr_dest_pos = keylen;
+        curr_dest_pos += sizeof(keylen);
+        memcpy(curr_dest_pos, keyp, keylen);
+        curr_dest_pos += keylen;
+        // now curr_dest_pos is pointing to where the leafentry should be packed
+        
+        // curr_src_pos now points to where the "rest" of the leafentry ought to be
+        // This is hackish right now, will fix when removing key from leafentry
+        uint32_t curr_le_size = leafentry_memsize(curr_le);
+        memcpy(curr_dest_pos, curr_le, leafentry_memsize(curr_le));
+        curr_dest_pos += curr_le_size;
+        curr_src_pos = (unsigned char *)curr_le + curr_le_size;
     }
-    //TODO: Verify we used EXACTLY all memory provided
-    
+    paranoid_invariant(((uint32_t)(curr_src_pos - buf)) == data_size);
+    toku_mempool_init(&m_buffer_mempool, newmem, (size_t)(curr_dest_pos - newmem), data_size * 2);
+
     // destroy old omt that was created by toku_create_empty_bn(), so we can create a new one
     m_buffer.destroy();
     m_buffer.create_steal_sorted_array(&array, num_entries, num_entries);
@@ -127,30 +167,35 @@ uint64_t bn_data::get_memory_size() {
     // mempool that has not yet been allocated for leaf entries
     size_t poolsize = toku_mempool_footprint(&m_buffer_mempool);
     //TODO: (yoni) Make sure m_n_bytes_in_buffer is consistent.. with.. what?
-//    invariant (poolsize >= m_n_bytes_in_buffer);
     invariant(poolsize >= get_disk_size());
     retval += poolsize;
     retval += m_buffer.memory_size();
     return retval;
 }
 
-void bn_data::delete_leafentry (uint32_t idx, LEAFENTRY le) {
+void bn_data::delete_leafentry (
+    uint32_t idx, 
+    const void* keyp UU(),
+    uint32_t keylen,
+    LEAFENTRY le
+    ) 
+{
     m_buffer.delete_at(idx);
-    toku_mempool_mfree(&m_buffer_mempool, 0, leafentry_memsize(le)); // Must pass 0, since le is no good any more.
+    toku_mempool_mfree(&m_buffer_mempool, 0, leafentry_memsize(le) + keylen + sizeof(keylen)); // Must pass 0, since le is no good any more.
 }
 
 /* mempool support */
 
 struct omt_compressor_state {
     struct mempool *new_kvspace;
-    LEAFENTRY *newvals;
+    KLPAIR *newvals;
 };
 
-static int move_it (const void* key UU(), const uint32_t keylen UU(), const LEAFENTRY& le, const uint32_t idx, struct omt_compressor_state * const oc) {
-    uint32_t size = leafentry_memsize(le);
-    LEAFENTRY CAST_FROM_VOIDP(newdata, toku_mempool_malloc(oc->new_kvspace, size, 1));
+static int move_it (const KLPAIR &klpair, const uint32_t idx, struct omt_compressor_state * const oc) {
+    uint32_t size = klpair_size(klpair);
+    KLPAIR CAST_FROM_VOIDP(newdata, toku_mempool_malloc(oc->new_kvspace, size, 1));
     paranoid_invariant_notnull(newdata); // we do this on a fresh mempool, so nothing bad should happen
-    memcpy(newdata, le, size);
+    memcpy(newdata, klpair, size);
     oc->newvals[idx] = newdata;
     return 0;
 }
@@ -161,13 +206,14 @@ void bn_data::omt_compress_kvspace(size_t added_size, void **maybe_free) {
     if (total_size_needed+total_size_needed >= m_buffer_mempool.size) {
         m_buffer_mempool.size = total_size_needed+total_size_needed;
     }
-    void *newmem = toku_xmalloc(m_buffer_mempool.size);
     struct mempool new_kvspace;
-    toku_mempool_init(&new_kvspace, newmem, m_buffer_mempool.size);
+    toku_mempool_construct(&new_kvspace, m_buffer_mempool.size);
     uint32_t numvals = omt_size();
-    LEAFENTRY *XMALLOC_N(numvals, newvals);
+    KLPAIR *XMALLOC_N(numvals, newvals);
     struct omt_compressor_state oc = { &new_kvspace, newvals };
-    omt_iterate<decltype(oc), move_it>(&oc);
+
+    m_buffer.iterate_on_range< decltype(oc), move_it >(0, omt_size(), &oc);
+
     m_buffer.destroy();
     m_buffer.create_steal_sorted_array(&newvals, numvals, numvals);
 
@@ -183,56 +229,63 @@ void bn_data::omt_compress_kvspace(size_t added_size, void **maybe_free) {
 //  from the OMT (which items refer to items in the old mempool) into the new mempool.
 //  If MAYBE_FREE is NULL then free the old mempool's space.
 //  Otherwise, store the old mempool's space in maybe_free.
-LEAFENTRY bn_data::mempool_malloc_from_omt(size_t size, void **maybe_free) {
+KLPAIR bn_data::mempool_malloc_from_omt(size_t size, void **maybe_free) {
     void *v = toku_mempool_malloc(&m_buffer_mempool, size, 1);
     if (v == NULL) {
         omt_compress_kvspace(size, maybe_free);
         v = toku_mempool_malloc(&m_buffer_mempool, size, 1);
         paranoid_invariant_notnull(v);
     }
-    return (LEAFENTRY)v;
+    return (KLPAIR)v;
 }
 
 //TODO: probably not free the "maybe_free" right away?
 void bn_data::get_space_for_overwrite(
     uint32_t idx,
+    const void* keyp,
+    uint32_t keylen,
     uint32_t old_le_size,
-    LEAFENTRY old_le_space UU(),
     uint32_t new_size,
     LEAFENTRY* new_le_space
     )
 {
     void* maybe_free = nullptr;
-    *new_le_space = mempool_malloc_from_omt(
-        new_size,
+    KLPAIR new_kl = mempool_malloc_from_omt(
+        new_size + keylen + sizeof(keylen),
         &maybe_free
         );
     //TODO: See if we can improve perf? by freeing first?  But then compress kvspace recopies it!
-    toku_mempool_mfree(&m_buffer_mempool, nullptr, old_le_size);  // Must pass nullptr, since le is no good any more.
+    toku_mempool_mfree(&m_buffer_mempool, nullptr, old_le_size + keylen + sizeof(keylen));  // Must pass nullptr, since le is no good any more.
     if (maybe_free) {
         toku_free(maybe_free);
     }
-    m_buffer.set_at(*new_le_space, idx);
+    new_kl->keylen = keylen;
+    memcpy(new_kl->key_le, keyp, keylen);
+    m_buffer.set_at(new_kl, idx);
+    *new_le_space = get_le_from_klpair(new_kl);
 }
 
 //TODO: probably not free the "maybe_free" right away?
 void bn_data::get_space_for_insert(
     uint32_t idx,
-    const void* keyp UU(),
-    uint32_t keylen UU(),
+    const void* keyp,
+    uint32_t keylen,
     size_t size,
     LEAFENTRY* new_le_space
     )
 {
     void* maybe_free = nullptr;
-    *new_le_space = mempool_malloc_from_omt(
-        size,
+    KLPAIR new_kl = mempool_malloc_from_omt(
+        size + keylen + sizeof(keylen),
         &maybe_free
         );
     if (maybe_free) {
         toku_free(maybe_free);
     }
-    m_buffer.insert_at(*new_le_space, idx);
+    new_kl->keylen = keylen;
+    memcpy(new_kl->key_le, keyp, keylen);
+    m_buffer.insert_at(new_kl, idx);
+    *new_le_space = get_le_from_klpair(new_kl);
 }
 
 //TODO: implement the rest (e.g. above)
@@ -247,7 +300,7 @@ void bn_data::move_leafentries_to(
 {
     paranoid_invariant(lbi < ube);
     paranoid_invariant(ube <= omt_size());
-    LEAFENTRY *XMALLOC_N(ube-lbi, newleafpointers);    // create new omt
+    KLPAIR *XMALLOC_N(ube-lbi, newklpointers);    // create new omt
 
     size_t mpsize = toku_mempool_get_used_space(&m_buffer_mempool);   // overkill, but safe
     struct mempool *dest_mp = &dest_bd->m_buffer_mempool;
@@ -256,17 +309,18 @@ void bn_data::move_leafentries_to(
 
     uint32_t i = 0;
     for (i = lbi; i < ube; i++) {
-        LEAFENTRY curr_le;
-        m_buffer.fetch(i, &curr_le);
+        KLPAIR curr_kl;
+        m_buffer.fetch(i, &curr_kl);
 
-        size_t le_size = leafentry_memsize(curr_le);
-        LEAFENTRY CAST_FROM_VOIDP(new_le, toku_mempool_malloc(dest_mp, le_size, 1));
-        memcpy(new_le, curr_le, le_size);
-        newleafpointers[i-lbi] = new_le;
-        toku_mempool_mfree(src_mp, curr_le, le_size);
+        size_t kl_size = klpair_size(curr_kl);
+        KLPAIR new_kl = NULL;
+        CAST_FROM_VOIDP(new_kl, toku_mempool_malloc(dest_mp, kl_size, 1));
+        memcpy(new_kl, curr_kl, kl_size);
+        newklpointers[i-lbi] = new_kl;
+        toku_mempool_mfree(src_mp, curr_kl, kl_size);
     }
 
-    dest_bd->m_buffer.create_steal_sorted_array(&newleafpointers, ube-lbi, ube-lbi);
+    dest_bd->m_buffer.create_steal_sorted_array(&newklpointers, ube-lbi, ube-lbi);
     // now remove the elements from src_omt
     for (i=ube-1; i >= lbi; i--) {
         m_buffer.delete_at(i);
@@ -289,47 +343,65 @@ uint32_t bn_data::omt_size(void) const {
 void bn_data::destroy(void) {
     // The buffer may have been freed already, in some cases.
     m_buffer.destroy();
-    //TODO: Can we just always call mempool_destroy?
     toku_mempool_destroy(&m_buffer_mempool);
 }
 
 //TODO: Splitting key/val requires changing this
-void* bn_data::replace_contents_with_clone_of_sorted_array(uint32_t num_les, LEAFENTRY* old_les, size_t *le_sizes, size_t mempool_size) {
-    void * retval = toku_mempool_get_base(&m_buffer_mempool);
+void bn_data::replace_contents_with_clone_of_sorted_array(
+    uint32_t num_les,
+    const void** old_key_ptrs,
+    uint32_t* old_keylens,
+    LEAFENTRY* old_les, 
+    size_t *le_sizes, 
+    size_t mempool_size // TODO: make sure mempool_size is properly passed in
+    ) 
+{
     toku_mempool_construct(&m_buffer_mempool, mempool_size);
-    LEAFENTRY *XMALLOC_N(num_les, le_array);
+    KLPAIR *XMALLOC_N(num_les, le_array);
     for (uint32_t idx = 0; idx < num_les; idx++) {
-        void *new_le = toku_mempool_malloc(&m_buffer_mempool, le_sizes[idx], 1); // point to new location
-        //TODO: Splitting key/val requires changing this; memcpy may not be sufficient
-        memcpy(new_le, old_les[idx], le_sizes[idx]);
-        CAST_FROM_VOIDP(le_array[idx], new_le);
+        KLPAIR new_kl = (KLPAIR)toku_mempool_malloc(
+            &m_buffer_mempool,
+            le_sizes[idx] + old_keylens[idx] + sizeof(uint32_t),
+            1); // point to new location
+        new_kl->keylen = old_keylens[idx];
+        memcpy(new_kl->key_le, old_key_ptrs[idx], new_kl->keylen);
+        memcpy(get_le_from_klpair(new_kl), old_les[idx], le_sizes[idx]);
+        CAST_FROM_VOIDP(le_array[idx], new_kl);
     }
     //TODO: Splitting key/val requires changing this; keys are stored in old omt.. cannot delete it yet?
     m_buffer.destroy();
     m_buffer.create_steal_sorted_array(&le_array, num_les, num_les);
-    return retval;
 }
 
 
 // get info about a single leafentry by index
 int bn_data::fetch_le(uint32_t idx, LEAFENTRY *le) {
-    return m_buffer.fetch(idx, le);
+    KLPAIR klpair = NULL;
+    int r = m_buffer.fetch(idx, &klpair);
+    if (r == 0) {
+        *le = get_le_from_klpair(klpair);
+    }
+    return r;
 }
 
 //TODO: reimplement if/when we split keys and vals
 int bn_data::fetch_klpair(uint32_t idx, LEAFENTRY *le, uint32_t *len, void** key) {
-    int r = fetch_le(idx, le);
+    KLPAIR klpair = NULL;
+    int r = m_buffer.fetch(idx, &klpair);
     if (r == 0) {
-        *key = le_key_and_len(*le, len);
+        *len = klpair->keylen;
+        *key = klpair->key_le;
+        *le = get_le_from_klpair(klpair);
     }
     return r;
 }
 
 //TODO: reimplement if/when we split keys and vals
 int bn_data::fetch_le_disksize(uint32_t idx, size_t *size) {
-    LEAFENTRY le;
-    int r = fetch_le(idx, &le);
+    KLPAIR klpair = NULL;
+    int r = m_buffer.fetch(idx, &klpair);
     if (r == 0) {
+        LEAFENTRY le = get_le_from_klpair(klpair);
         *size = leafentry_disksize(le);
     }
     return r;
@@ -337,10 +409,11 @@ int bn_data::fetch_le_disksize(uint32_t idx, size_t *size) {
 
 //TODO: reimplement if/when we split keys and vals
 int bn_data::fetch_le_key_and_len(uint32_t idx, uint32_t *len, void** key) {
-    LEAFENTRY le;
-    int r = fetch_le(idx, &le);
+    KLPAIR klpair = NULL;
+    int r = m_buffer.fetch(idx, &klpair);
     if (r == 0) {
-        *key = le_key_and_len(le, len);
+        *len = klpair->keylen;
+        *key = klpair->key_le;
     }
     return r;
 }
@@ -349,13 +422,13 @@ int bn_data::fetch_le_key_and_len(uint32_t idx, uint32_t *len, void** key) {
 struct mp_pair {
     void* orig_base;
     void* new_base;
-    le_omt_t* omt;
+    klpair_omt_t* omt;
 };
 
-static int fix_mp_offset(const void* key UU(), const uint32_t keylen UU(), const LEAFENTRY &le, const uint32_t i, struct mp_pair * const p) {
-    char* old_value = (char *) le;
+static int fix_mp_offset(const KLPAIR &klpair, const uint32_t idx,  struct mp_pair * const p) {
+    char* old_value = (char *) klpair;
     char *new_value = old_value - (char *)p->orig_base + (char *)p->new_base;
-    p->omt->set_at((LEAFENTRY)new_value, i);
+    p->omt->set_at((KLPAIR)new_value, idx);
     return 0;
 }
 
@@ -368,7 +441,7 @@ void bn_data::clone(bn_data* orig_bn_data) {
     p.omt = &m_buffer;
     // TODO: fix this to use the right API
 
-    int r = omt_iterate<decltype(p), fix_mp_offset>(&p);
+    int r = m_buffer.iterate_on_range<decltype(p), fix_mp_offset>(0, omt_size(), &p);
     invariant_zero(r);
 }
 

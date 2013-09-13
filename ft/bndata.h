@@ -108,28 +108,48 @@ UU() verify_in_mempool(OMTVALUE lev, uint32_t UU(idx), void *mpv)
 
 #endif
 
+struct klpair_struct {
+    uint32_t keylen;
+    uint8_t key_le[0]; // key, followed by le
+};
+
+typedef struct klpair_struct *KLPAIR;
+
+static LEAFENTRY get_le_from_klpair(KLPAIR klpair){
+    uint32_t keylen = klpair->keylen;
+    LEAFENTRY le = (LEAFENTRY)(klpair->key_le + keylen);
+    return le;
+}
+
+static void blah() {
+}
+
 //TODO: #warning make sure destroy destroys the mempool (OR IS THIS BAD?) Allow manual killing of it for now
 //TODO: #warning can't necessarily do this because of destroying basement nodes not doing it.. they might pass things along?
 
 template<typename omtcmp_t,
          int (*h)(const DBT &, const omtcmp_t &)>
-static int wrappy_fun_find(const LEAFENTRY &le, const omtcmp_t &extra) {
+static int wrappy_fun_find(const KLPAIR &klpair, const omtcmp_t &extra) {
     //TODO: kill this function when we split, and/or use toku_fill_dbt
     DBT kdbt;
-    kdbt.data = le_key_and_len(le, &kdbt.size);
+    kdbt.data = klpair->key_le;
+    kdbt.size = klpair->keylen;
+    blah();
     return h(kdbt, extra);
 }
 
 template<typename iterate_extra_t,
          int (*h)(const void * key, const uint32_t keylen, const LEAFENTRY &, const uint32_t idx, iterate_extra_t *const)>
-static int wrappy_fun_iterate(const LEAFENTRY &le, const uint32_t idx, iterate_extra_t *const extra) {
+static int wrappy_fun_iterate(const KLPAIR &klpair, const uint32_t idx, iterate_extra_t *const extra) {
     //TODO: rewrite this function when we split
-    uint32_t keylen;
-    void* key = le_key_and_len(le, &keylen);
+    uint32_t keylen = klpair->keylen;
+    void* key = klpair->key_le;
+    LEAFENTRY le = get_le_from_klpair(klpair);
+    blah();
     return h(key, keylen, le, idx, extra);
 }
 
-typedef toku::omt<LEAFENTRY> le_omt_t;
+typedef toku::omt<KLPAIR> klpair_omt_t;
 // This class stores the data associated with a basement node
 class bn_data {
 public:
@@ -160,11 +180,16 @@ public:
     template<typename omtcmp_t,
              int (*h)(const DBT &, const omtcmp_t &)>
     int find_zero(const omtcmp_t &extra, LEAFENTRY *const value, void** key, uint32_t* keylen, uint32_t *const idxp) const {
-        int r = m_buffer.find_zero< omtcmp_t, wrappy_fun_find<omtcmp_t, h> >(extra, value, idxp);
+        KLPAIR klpair = NULL;
+        int r = m_buffer.find_zero< omtcmp_t, wrappy_fun_find<omtcmp_t, h> >(extra, &klpair, idxp);
         if (r == 0) {
+            if (value) {
+                *value = get_le_from_klpair(klpair);
+            }
             if (key) {
                 paranoid_invariant(keylen != NULL);
-                *key = le_key_and_len(*value, keylen);
+                *key = klpair->key_le;
+                *keylen = klpair->keylen;
             }
             else {
                 paranoid_invariant(keylen == NULL);
@@ -177,11 +202,16 @@ public:
     template<typename omtcmp_t,
              int (*h)(const DBT &, const omtcmp_t &)>
     int find(const omtcmp_t &extra, int direction, LEAFENTRY *const value, void** key, uint32_t* keylen, uint32_t *const idxp) const {
-        int r = m_buffer.find< omtcmp_t, wrappy_fun_find<omtcmp_t, h> >(extra, direction, value, idxp);
+        KLPAIR klpair = NULL;
+        int r = m_buffer.find< omtcmp_t, wrappy_fun_find<omtcmp_t, h> >(extra, direction, &klpair, idxp);
         if (r == 0) {
+            if (value) {
+                *value = get_le_from_klpair(klpair);
+            }
             if (key) {
                 paranoid_invariant(keylen != NULL);
-                *key = le_key_and_len(*value, keylen);
+                *key = klpair->key_le;
+                *keylen = klpair->keylen;
             }
             else {
                 paranoid_invariant(keylen == NULL);
@@ -206,18 +236,30 @@ public:
 
     // Replaces contents, into brand new mempool.
     // Returns old mempool base, expects caller to free it.
-    void* replace_contents_with_clone_of_sorted_array(uint32_t num_les, LEAFENTRY* old_les, size_t *le_sizes, size_t mempool_size);
+    void replace_contents_with_clone_of_sorted_array(
+        uint32_t num_les,
+        const void** old_key_ptrs,
+        uint32_t* old_keylens,
+        LEAFENTRY* old_les,
+        size_t *le_sizes,
+        size_t mempool_size
+        );
 
     void clone(bn_data* orig_bn_data);
-    void delete_leafentry (uint32_t idx, LEAFENTRY le);
-    void get_space_for_overwrite(uint32_t idx, uint32_t old_size, LEAFENTRY old_le_space, uint32_t new_size, LEAFENTRY* new_le_space);
+    void delete_leafentry (
+        uint32_t idx,
+        const void* keyp,
+        uint32_t keylen,
+        LEAFENTRY le
+        );
+    void get_space_for_overwrite(uint32_t idx, const void* keyp, uint32_t keylen, uint32_t old_size, uint32_t new_size, LEAFENTRY* new_le_space);
     void get_space_for_insert(uint32_t idx, const void* keyp, uint32_t keylen, size_t size, LEAFENTRY* new_le_space);
 private:
     // Private functions
-    LEAFENTRY mempool_malloc_from_omt(size_t size, void **maybe_free);
+    KLPAIR mempool_malloc_from_omt(size_t size, void **maybe_free);
     void omt_compress_kvspace(size_t added_size, void **maybe_free);
 
-    le_omt_t m_buffer;                     // pointers to individual leaf entries
+    klpair_omt_t m_buffer;                     // pointers to individual leaf entries
     struct mempool m_buffer_mempool;  // storage for all leaf entries
 };
 

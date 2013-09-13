@@ -238,7 +238,6 @@ static void do_something(
     uint32_t idx,
     ULE ule, // temporary, used to pass in key and keylen to get_space_for_insert
     uint32_t old_le_size,
-    LEAFENTRY old_le_space,
     size_t size, 
     LEAFENTRY* new_le_space
     ) 
@@ -249,7 +248,7 @@ static void do_something(
     else {
         // this means we are overwriting something
         if (old_le_size > 0) {
-            data_buffer->get_space_for_overwrite(idx, old_le_size, old_le_space, size, new_le_space);
+            data_buffer->get_space_for_overwrite(idx, ule->keyp, ule->keylen, old_le_size, size, new_le_space);
         }
         // this means we are inserting something new
         else {
@@ -944,7 +943,7 @@ le_pack(ULE ule, // data to be packed into new leafentry
             }
         }
         if (data_buffer && old_le_size > 0) {
-            data_buffer->delete_leafentry(idx, old_le_space);
+            data_buffer->delete_leafentry(idx, ule->keyp, ule->keylen, old_le_space);
         }
         *new_leafentry_p = NULL;
         rval = 0;
@@ -953,7 +952,7 @@ le_pack(ULE ule, // data to be packed into new leafentry
 found_insert:;
     memsize = le_memsize_from_ule(ule);
     LEAFENTRY new_leafentry;
-    do_something(data_buffer, idx, ule, old_le_size, old_le_space, memsize, &new_leafentry);
+    do_something(data_buffer, idx, ule, old_le_size, memsize, &new_leafentry);
 
     //Universal data
     new_leafentry->keylen  = toku_htod32(ule->keylen);
