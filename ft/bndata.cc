@@ -306,13 +306,17 @@ void bn_data::get_space_for_insert(
         size_alloc,
         &maybe_free
         );
-    if (maybe_free) {
-        toku_free(maybe_free);
-    }
     new_kl->keylen = keylen;
     memcpy(new_kl->key_le, keyp, keylen);
     m_buffer.insert_at(new_kl, idx);
     *new_le_space = get_le_from_klpair(new_kl);
+    // free at end, so that the keyp and keylen
+    // passed in is still valid (you never know if
+    // it was part of the old mempool, this is just
+    // safer).
+    if (maybe_free) {
+        toku_free(maybe_free);
+    }
 }
 
 void bn_data::move_leafentries_to(
